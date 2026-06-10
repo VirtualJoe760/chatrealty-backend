@@ -141,7 +141,9 @@ interface CashflowStats {
   };
 
   assumptions: {                  // the inputs used — render as "what-if" defaults
-    mortgageRate: number; loanTermYears: number;
+    mortgageRate: number;         // the LIVE 30-yr fixed rate used (see rateSource)
+    rateSource: "live" | "fallback" | "manual";
+    loanTermYears: number;
     propertyTaxRate: number; insuranceRate: number;
     vacancyPct: number; managementPct: number; maintenancePct: number;
     closingCostPct: number; downScenarios: number[]; note: string;
@@ -276,7 +278,9 @@ db.unified_listings.createIndex(
 
 ## Assumptions & caveats (surface these in the UI / chat answer)
 
-- **Financing defaults** (overridable per query): 7.0% / 30-yr investment loan, 1.25% property tax, 0.4% insurance, 5% vacancy, 8% management, 5% maintenance/capex, 3% closing costs. These live in `cashflowStats.assumptions` — echo them so the user knows what "cash-flow" assumed.
+- **Mortgage rate is LIVE.** `assumptions.mortgageRate` is the current 30-yr fixed rate (Freddie Mac `frm_30`), fetched once per build from API Ninjas (`GET /v1/mortgagerate`, key `API_NINJA_KEY` in `.env.local`). `assumptions.rateSource` tells you which: `"live"` (fetched this run), `"fallback"` (API failed → last-stored live rate, or the 7% default), or `"manual"` (`--rate` override). **Display `mortgageRate` and re-derive custom scenarios from it — never hard-code 7%.** The rate moves slowly (weekly PMMS), so the Tue+Fri cadence keeps it current.
+- **Other financing defaults** (overridable per query): 30-yr term, 1.25% property tax, 0.4% insurance, 5% vacancy, 8% management, 5% maintenance/capex, 3% closing costs. All live in `cashflowStats.assumptions` — echo them so the user knows what "cash-flow" assumed.
+- **A `listPrice` floor of $25,000** is applied — listings below it are junk or misclassified rentals and are skipped (no `cashflowStats`), so they can't top the cash-flow sort with absurd cap rates.
 - **Property tax is derived from list price** — there is no `taxAnnualAmount` in the MLS data. **Mello-Roos / special assessments are NOT modeled**, which understates costs in newer Riverside developments. Flag this for new-construction areas.
 - **HOA** comes from `associationFee` (~87% of sale listings) normalized to monthly; assumed monthly when frequency is absent. Desert country-club HOAs are large and materially swing cash flow.
 - **Seasonal rents:** the going rate is the long-term annual basis (see Schema 1). A furnished seasonal/STR strategy can earn far more than `goingRate` implies — that's a separate model; don't conflate.

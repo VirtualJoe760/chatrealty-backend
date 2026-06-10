@@ -44,6 +44,7 @@ import time
 import argparse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+import requests
 from pymongo import MongoClient, UpdateOne
 from dotenv import load_dotenv
 
@@ -69,18 +70,122 @@ DEFAULTS = {
 }
 DOWN_SCENARIOS = [0.20, 0.25]    # the user's "20% down" + a stricter alternative
 BULK_BATCH = 500
+MIN_LIST_PRICE = 25000           # below this, the listPrice is junk or a misclassified
+                                 # rental — skip so it can't top the cash-flow sort
+
+# ── live mortgage rate (API Ninjas) ──────────────────────────────────────────
+# Endpoint returns the weekly Freddie Mac PMMS rates; we want the latest 30-yr
+# fixed (`frm_30`, a percent string). Shape observed 2026-06:
+#   [{"week":"current","data":{"frm_30":"6.48","frm_15":"5.79","week":"2026-06-04"}}]
+API_NINJA_URL = "https://api.api-ninjas.com/v1/mortgagerate"
+RATE_MIN, RATE_MAX = 0.02, 0.20   # sane guardrail (2%–20%) — reject garbage
 
 LEASE_NOTE = ("Property tax derived from list price (no taxAnnualAmount in MLS). "
               "Mello-Roos / special assessments not modeled.")
+
+RATE_NOTE = {
+    "live": "Mortgage rate is the current 30-yr fixed (Freddie Mac frm_30, live from API Ninjas).",
+    "fallback": "Mortgage rate is a fallback (API Ninjas unavailable; last-stored live rate or default).",
+    "manual": "Mortgage rate set manually via --rate.",
+}
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 db = client.get_database()
 listings_coll = db.unified_listings
 subs_coll = db.subdivisions
 rent_rates_coll = db.rent_rates
+system_config_coll = db.system_config   # persists last live mortgage rate for fallback
 print("✅ Connected to MongoDB")
 
 MAX_BEDS_BUCKET = 5
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🏦 LIVE MORTGAGE RATE  (API Ninjas, fetched once per run)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _extract_frm30(payload):
+    """
+    Pull the latest 30-yr fixed (`frm_30`, a percent) out of API Ninjas' response,
+    defensively — the shape can be a list of weekly records, a {data:…} wrapper,
+    or a flat object. Prefer a record flagged week=="current".
+    """
+    records = []
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            records = payload["data"]
+        else:
+            records = [payload]
+    # current-week record first, then the rest
+    records = sorted(records, key=lambda r: 0 if isinstance(r, dict) and r.get("week") == "current" else 1)
+
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        # frm_30 may sit on the record or nested under .data
+        for holder in (rec, rec.get("data") if isinstance(rec.get("data"), dict) else None):
+            if not isinstance(holder, dict):
+                continue
+            v = holder.get("frm_30")
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v.strip().rstrip("%"))
+                except ValueError:
+                    pass
+    return None
+
+
+def _fallback_rate(default_rate, reason):
+    """Prefer the last successfully-stored LIVE rate; else the hardcoded default."""
+    stored = None
+    try:
+        doc = system_config_coll.find_one({"_id": "mortgage_rate"})
+        if doc and RATE_MIN <= doc.get("rate", 0) <= RATE_MAX:
+            stored = doc["rate"]
+    except Exception:
+        pass
+    rate = stored if stored is not None else default_rate
+    src = "last-stored live" if stored is not None else "hardcoded default"
+    print(f"⚠️  mortgage rate: {rate*100:.2f}% (fallback — {reason}; using {src})")
+    return rate, "fallback"
+
+
+def fetch_current_mortgage_rate(default_rate):
+    """
+    Return (rate_decimal, source) where source ∈ {"live","fallback"}.
+    Called ONCE per run. NEVER raises — a rate-fetch failure must not abort the build.
+    """
+    key = os.getenv("API_NINJA_KEY") or os.getenv("API_NINJAS_KEY")  # accept both spellings
+    if not key:
+        return _fallback_rate(default_rate, "no API_NINJA_KEY in env")
+    try:
+        resp = requests.get(API_NINJA_URL, headers={"X-Api-Key": key}, timeout=15)
+        if resp.status_code != 200:
+            return _fallback_rate(default_rate, f"HTTP {resp.status_code}")
+        frm30 = _extract_frm30(resp.json())
+        if frm30 is None:
+            return _fallback_rate(default_rate, "frm_30 not found in response")
+        rate = frm30 / 100.0
+        if not (RATE_MIN <= rate <= RATE_MAX):
+            return _fallback_rate(default_rate, f"frm_30={frm30} out of sane range")
+        try:
+            system_config_coll.update_one(
+                {"_id": "mortgage_rate"},
+                {"$set": {"frm30": frm30, "rate": rate, "source": "live",
+                          "fetchedAt": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+        except Exception:
+            pass  # persistence is best-effort; never block the build
+        print(f"🏦 mortgage rate: {frm30:.2f}% (live, API Ninjas frm_30)")
+        return rate, "live"
+    except Exception as e:
+        return _fallback_rate(default_rate, f"{type(e).__name__}: {e}")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 🧰 HELPERS
@@ -240,7 +345,9 @@ def compute_cashflow(listing: dict, rent_est: dict, a: dict) -> dict:
         "grossYieldPct": round(gross_rent * 12 / price * 100, 2) if price else None,
         "fixedCosts": fixed_costs,
         "scenarios": scenarios,
-        "assumptions": {**a, "downScenarios": DOWN_SCENARIOS, "note": LEASE_NOTE},
+        # `a` already carries mortgageRate, rateSource, and the dynamic note set in main().
+        "assumptions": {**a, "downScenarios": DOWN_SCENARIOS,
+                        "note": a.get("note", LEASE_NOTE)},
     }
 
 
@@ -287,8 +394,16 @@ def main():
         sys.exit(1)
 
     a = dict(DEFAULTS)
+    # Mortgage rate priority: --rate override > live fetch > fallback (last-stored/default).
     if args.rate is not None:
         a["mortgageRate"] = args.rate
+        rate_source = "manual"
+        print(f"🏦 mortgage rate: {args.rate*100:.2f}% (manual --rate override)")
+    else:
+        a["mortgageRate"], rate_source = fetch_current_mortgage_rate(DEFAULTS["mortgageRate"])
+    a["rateSource"] = rate_source
+    a["note"] = LEASE_NOTE + " " + RATE_NOTE[rate_source]
+
     if args.tax_rate is not None:
         a["propertyTaxRate"] = args.tax_rate
     if args.vacancy is not None:
@@ -312,7 +427,7 @@ def main():
 
     started = time.time()
     pending: list[UpdateOne] = []
-    processed = priced = no_rent = skipped_fresh = cashflowing = written = 0
+    processed = priced = no_rent = skipped_fresh = cashflowing = written = bad_price = 0
     fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=args.skip_fresh_hours)
                     if args.skip_fresh_hours else None)
 
@@ -327,6 +442,11 @@ def main():
                         continue
                 except ValueError:
                     pass
+
+        price = listing.get("listPrice")
+        if not isinstance(price, (int, float)) or price < MIN_LIST_PRICE:
+            bad_price += 1
+            continue
 
         rent_est = estimate_rent(listing, zip_index, sub_index)
         if not rent_est:
@@ -362,6 +482,7 @@ def main():
     print(f"Priced:           {priced:,}")
     print(f"  Cash-flowing@20%:{cashflowing:,}")
     print(f"No rent signal:   {no_rent:,}")
+    print(f"Bad/low price:    {bad_price:,}")
     if fresh_cutoff:
         print(f"Skipped (fresh):  {skipped_fresh:,}")
     print(f"Written:          {written:,}" if not args.dry_run else "Dry-run (no writes)")
