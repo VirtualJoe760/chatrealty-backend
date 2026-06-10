@@ -1,0 +1,11 @@
+certifi==2026.2.25
+charset-normalizer==3.4.7
+dnspython==2.8.0
+idna==3.12
+pymongo==4.17.0
+python-dotenv==1.2.2
+RapidFuzz==3.14.5
+requests==2.33.1
+tqdm==4.67.3
+Unidecode==1.4.0
+urllib3==2.6.3

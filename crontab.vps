@@ -1,0 +1,54 @@
+# jpsrealtor VPS crontab — canonical reference
+# Install with: crontab /root/jpsrealtor/crontab.vps
+# Verify with:  crontab -l
+#
+# All paths absolute. Logs land in /root/jpsrealtor/local-logs/ (or /var/log/ for FUB and MLS sync).
+# Schedule rationale: docs/cma/SUBDIVISION_AND_CITY_CMA.md, docs/cma/LISTING_CMA.md.
+
+# ── FUB lead sync — every 15 min ─────────────────────────────────────────────
+*/15 * * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/fub/sync-fub-leads.py >> /var/log/fub-sync.log 2>&1
+
+# ── Listing CMA — weekly Sunday 1 AM (~11 hr full backfill) ──────────────────
+0 1 * * 0 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1
+
+# ── MLS full sync — Sunday 3 AM (catches missed listings, refreshes all data) ─
+0 3 * * 0 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/run-pipeline.py --all >> /var/log/mls-update-full.log 2>&1
+
+# ── Search Index — daily 4 AM (~75 min) ──────────────────────────────────────
+0 4 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/mls/backend/build_search_index.py >> local-logs/search-index-cron.log 2>&1
+
+# ── MLS incremental sync — Mon-Sat 6 AM (25-hour window catches all changes) ─
+0 6 * * 1-6 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/run-pipeline.py --all --incremental >> /var/log/mls-update.log 2>&1
+
+# ── MLS status update — daily 7 AM (Active/Pending across all 8 MLSs) ────────
+0 7 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/update-status.py >> /var/log/mls-status-update.log 2>&1
+
+# ── Subdivision CMA — daily 8 AM (~55 min) ───────────────────────────────────
+0 8 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-subdivision-cma.py --all >> local-logs/subdivision-cma-cron.log 2>&1
+
+# ── Photo cache — daily 9 AM ─────────────────────────────────────────────────
+0 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/cache-photos.py >> /var/log/photo-cache.log 2>&1
+
+# ── Fetch photos (delta) — daily 9:30 AM ─────────────────────────────────────
+30 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/fetch-photos.py --all --delta >> /var/log/mls-fetch-photos.log 2>&1
+
+# ── Rate Profiles — Mon-Sat 9:30 AM (~30-60 min) ─────────────────────────────
+# Skipped on Sundays so the weekly listing-CMA backfill below has Atlas to itself.
+30 9 * * 1-6 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-rate-profiles.py --all --workers 4 >> local-logs/rate-profiles-cron.log 2>&1
+
+# ── Rent Rates + Cash-Flow — Tue & Fri 2 AM (chained, ~1.5–2 hr) ─────────────
+# Layer 1 (going rate per subdivision + ZIP) then Layer 2 (per-listing cashflow,
+# which reads layer 1's output). Chained so cashflow never reads a half-built
+# rent_rates set. Twice weekly: rents move slowly and fidelity beats cadence
+# (see docs/cma/RENTAL_CASHFLOW.md). Powers the "cash-flowing listings" MCP tool.
+0 2 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-rent-rates.py --all >> local-logs/rent-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-cashflow.py --all >> local-logs/cashflow-cron.log 2>&1
+
+# ── Historical closed listing sync — daily 10 AM ─────────────────────────────
+0 10 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/historical_closed_sync.py >> /var/log/mls-sync/historical-closed-sync.log 2>&1
+
+# ── DISABLED jobs (kept for reference) ───────────────────────────────────────
+# Article request checker — /root/jpsrealtor/scripts/check-article-requests-simple.js not yet rebuilt
+#*/5 * * * * cd /root/jpsrealtor && /usr/bin/node /root/jpsrealtor/scripts/check-article-requests-simple.js >> /var/log/claude-article-writer.log 2>&1
+
+# MongoDB backup — /usr/local/bin/backup_payload_db.sh not yet rebuilt (needs mongodb-database-tools)
+#0 2 * * * /usr/local/bin/backup_payload_db.sh >> /var/log/payload_backup.log 2>&1
