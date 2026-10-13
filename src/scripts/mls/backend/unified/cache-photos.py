@@ -81,7 +81,10 @@ RUN_LOG_PATH = LOG_DIR / f"run_{RUN_ID}.jsonl"
 # 🗃️ DB
 # ──────────────────────────────────────────────────────────────────────────────
 
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000, socketTimeoutMS=20000)
+# 20s applied per socket read, so a slow getMore while streaming the full
+# unified_listings cursor (86k docs) threw NetworkTimeout and killed the run.
+# This is why db.photos received nothing after 2026-08-11.
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000, socketTimeoutMS=300000)
 db = client.get_database()
 photos_collection = db.photos
 listings_collection = db.unified_listings
@@ -269,7 +272,10 @@ def main():
     if args.mls:
         query["mlsSource"] = args.mls
 
-    cursor = listings_collection.find(query, {"listingKey": 1, "mlsSource": 1})
+    # batch_size caps each getMore so one slow round-trip cannot stall the
+    # whole cursor read
+    cursor = listings_collection.find(query, {"listingKey": 1, "mlsSource": 1},
+                                      batch_size=2000)
     if args.limit:
         cursor = cursor.limit(args.limit)
 
