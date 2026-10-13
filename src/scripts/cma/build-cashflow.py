@@ -69,6 +69,20 @@ DEFAULTS = {
     "closingCostPct": 0.03,      # fraction of price, for cash-on-cash denominator
 }
 DOWN_SCENARIOS = [0.20, 0.25]    # the user's "20% down" + a stricter alternative
+
+# A furnished seasonal rental is a different operating business from an annual
+# lease: it turns over several times a year and is usually professionally managed
+# at vacation-rental rates. `annualizedMonthly` already spreads the tiered rates
+# across 12 months at FULL occupancy, so the vacancy bump below is what carries
+# the risk of unsold weeks.
+SEASONAL_OVERRIDES = {
+    "managementPct": 0.20,   # vacation-rental management, vs 8% for an annual lease
+    "vacancyPct": 0.15,      # unsold shoulder-season weeks
+    "maintenancePct": 0.08,  # higher turnover wear + linens/consumables
+}
+SEASONAL_NOTE = ("Seasonal strategy uses annualizedMonthly (sum(tier rate x months) / 12) "
+                 "as gross rent — never the peak rate — with vacation-rental management, "
+                 "vacancy and maintenance assumptions.")
 BULK_BATCH = 500
 MIN_LIST_PRICE = 25000           # below this, the listPrice is junk or a misclassified
                                  # rental — skip so it can't top the cash-flow sort
@@ -231,6 +245,39 @@ def monthly_pi(principal: float, annual_rate: float, term_years: int) -> float:
     return round(principal * r * (1 + r) ** n / ((1 + r) ** n - 1), 2)
 
 
+def loan_from_pi(pi: float, annual_rate: float, term_years: int) -> float:
+    """Inverse of monthly_pi: the largest loan whose payment is `pi`."""
+    if pi <= 0:
+        return 0.0
+    r = annual_rate / 12
+    n = term_years * 12
+    if r == 0:
+        return pi * n
+    return pi * ((1 + r) ** n - 1) / (r * (1 + r) ** n)
+
+
+def break_even_down(price: float, effective_rent: float, opex_ex_debt: float,
+                    a: dict) -> tuple:
+    """Smallest down-payment fraction at which monthly cash flow reaches zero.
+
+    Stored so the question "what do I need to put down here" is a field read
+    rather than a request-time solve, and so "what cash-flows at 20% down"
+    becomes find({breakEvenDownPct: {$lte: 0.20}}).
+
+    Returns (pct, note). pct is None when no down payment works, which happens
+    when operating costs alone already exceed effective rent — a 100% cash buyer
+    would still lose money monthly.
+    """
+    pi_budget = effective_rent - opex_ex_debt
+    if pi_budget <= 0:
+        return None, ("operating costs alone exceed effective rent; negative at any "
+                      "down payment including all-cash")
+    max_loan = loan_from_pi(pi_budget, a["mortgageRate"], a["loanTermYears"])
+    if max_loan >= price:
+        return 0.0, "cash-flows with no money down at this rent and rate"
+    return round(min(max(1 - max_loan / price, 0.0), 1.0), 4), None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 📊 RENT ESTIMATE  (consumes layer-1 rent_rates + subdivision rentStats)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -288,42 +335,105 @@ def estimate_rent(listing: dict, zip_index: dict, sub_index: dict) -> dict | Non
     return None
 
 
+
+
+def _seasonal_bed(block: dict, beds_b):
+    """Bedroom-matched annualizedMonthly from a `seasonal` block. 2 comps is a
+    deliberately low bar — seasonal tiered comps are scarce (~4.75% of profiles)
+    — so the sampleSize travels with the estimate for the consumer to weigh."""
+    if beds_b is None:
+        return None, 0
+    for e in block.get("byBed") or []:
+        if e.get("beds") == beds_b and e.get("count", 0) >= 2:
+            return _num(e.get("annualizedMonthly")), e.get("count", 0)
+    return None, 0
+
+
+def _seasonal_payload(block: dict, rent, source, confidence, sample):
+    """NOTE: monthlyRent is annualizedMonthly, never peakRate. peak/offPeak ride
+    along for display only; putting a peak rate into a payment calculation
+    overstates income by 2x or more."""
+    return {
+        "monthlyRent": rent,
+        "basis": "annualizedMonthly",
+        "source": source,
+        "confidence": confidence,
+        "sampleSize": sample,
+        "peakRate": block.get("peakRate"),
+        "offPeakRate": block.get("offPeakRate"),
+        "peakMonths": block.get("peakMonths") or [],
+        "geo": block.get("geo"),
+    }
+
+
+def estimate_seasonal_rent(listing: dict, zip_index: dict, sub_index: dict) -> dict | None:
+    """Seasonal gross rent for a sale listing, from the layer-1.5 aggregates
+    written by build-seasonal-rates.py. Falls back subdivision -> ZIP -> None and
+    records which source it used; never extrapolates from an insufficient block."""
+    beds_b = beds_bucket(listing.get("bedsTotal"))
+    name = (listing.get("subdivisionName") or "").strip().lower()
+    city = (listing.get("city") or "").strip().lower()
+
+    sub = sub_index.get((city, name)) if name else None
+    if sub:
+        s = sub.get("seasonal") or {}
+        if s.get("basis") == "tiered-median":
+            r, n = _seasonal_bed(s, beds_b)
+            if r:
+                return _seasonal_payload(s, r, "subdivision-seasonal-bedroom", "high", n)
+            if _num(s.get("annualizedMonthly")):
+                return _seasonal_payload(s, _num(s.get("annualizedMonthly")),
+                                         "subdivision-seasonal-area", "medium",
+                                         s.get("sampleSize", 0))
+
+    zdoc = zip_index.get(listing.get("postalCode"))
+    if zdoc:
+        s = zdoc.get("seasonal") or {}
+        if s.get("basis") == "tiered-median":
+            r, n = _seasonal_bed(s, beds_b)
+            if r:
+                return _seasonal_payload(s, r, "zip-seasonal-bedroom", "medium", n)
+            if _num(s.get("annualizedMonthly")):
+                return _seasonal_payload(s, _num(s.get("annualizedMonthly")),
+                                         "zip-seasonal-area", "low",
+                                         s.get("sampleSize", 0))
+    return None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 💵 CASH-FLOW MATH
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def compute_cashflow(listing: dict, rent_est: dict, a: dict) -> dict:
-    price = _num(listing.get("listPrice")) or 0
-    gross_rent = rent_est["monthlyRent"]
+def _run_strategy(price: float, gross_rent: float, hoa: float, a: dict) -> dict:
+    """One rent figure + one assumption set -> costs, scenarios, breakeven.
 
-    hoa = monthly_hoa(listing)
+    Factored out so the long-term and seasonal strategies run through identical
+    math and can only differ by their rent and their assumptions.
+    """
     tax = round(price * a["propertyTaxRate"] / 12, 2)
     ins = round(price * a["insuranceRate"] / 12, 2)
     vacancy = round(gross_rent * a["vacancyPct"], 2)
     mgmt = round(gross_rent * a["managementPct"], 2)
     maint = round(gross_rent * a["maintenancePct"], 2)
 
-    # Operating expenses excluding debt service (the "below NOI line" is debt).
-    opex_monthly = tax + ins + hoa + mgmt + maint + vacancy
+    opex_ex_debt = tax + ins + hoa + mgmt + maint
     effective_rent = gross_rent - vacancy
-    noi_annual = round((effective_rent - (tax + ins + hoa + mgmt + maint)) * 12, 2)
+    noi_annual = round((effective_rent - opex_ex_debt) * 12, 2)
     cap_rate = round(noi_annual / price * 100, 2) if price else None
 
     fixed_costs = {
         "grossRent": gross_rent, "vacancy": vacancy, "propertyTax": tax,
         "insurance": ins, "hoa": hoa, "management": mgmt, "maintenance": maint,
-        "operatingExpensesMonthly": round(opex_monthly, 2),
+        "operatingExpensesMonthly": round(opex_ex_debt + vacancy, 2),
     }
 
     scenarios = {}
     for down in DOWN_SCENARIOS:
         loan = price * (1 - down)
         pi = monthly_pi(loan, a["mortgageRate"], a["loanTermYears"])
-        monthly_cf = round(effective_rent - (tax + ins + hoa + mgmt + maint) - pi, 2)
+        monthly_cf = round(effective_rent - opex_ex_debt - pi, 2)
         cash_invested = price * down + price * a["closingCostPct"]
-        coc = round(monthly_cf * 12 / cash_invested * 100, 2) if cash_invested else None
-        dscr = round(noi_annual / (pi * 12), 2) if pi else None
         scenarios[f"down{int(down*100)}"] = {
             "downPct": down,
             "downPayment": round(price * down, 2),
@@ -331,24 +441,69 @@ def compute_cashflow(listing: dict, rent_est: dict, a: dict) -> dict:
             "monthlyPI": pi,
             "monthlyCashflow": monthly_cf,
             "annualCashflow": round(monthly_cf * 12, 2),
-            "cashOnCashPct": coc,
-            "dscr": dscr,                       # NOI / annual debt service
+            "cashOnCashPct": (round(monthly_cf * 12 / cash_invested * 100, 2)
+                              if cash_invested else None),
+            "dscr": round(noi_annual / (pi * 12), 2) if pi else None,
             "cashflows": monthly_cf > 0,
         }
 
+    be_pct, be_note = break_even_down(price, effective_rent, opex_ex_debt, a)
     return {
-        "lastUpdated": datetime.now(timezone.utc).isoformat(),
-        "listPrice": price,
-        "rentEstimate": rent_est,
+        "fixedCosts": fixed_costs,
+        "scenarios": scenarios,
         "capRatePct": cap_rate,
         "noiAnnual": noi_annual,
         "grossYieldPct": round(gross_rent * 12 / price * 100, 2) if price else None,
-        "fixedCosts": fixed_costs,
-        "scenarios": scenarios,
-        # `a` already carries mortgageRate, rateSource, and the dynamic note set in main().
+        "breakEvenDownPct": be_pct,
+        "breakEvenNote": be_note,
+    }
+
+
+def compute_cashflow(listing: dict, rent_est: dict, a: dict,
+                     seasonal_est: dict | None = None) -> dict:
+    """Long-term result stays at the top level unchanged — the MCP tools already
+    query cashflowStats.scenarios.down20 — with breakEvenDownPct added beside it
+    and both strategies also grouped under `strategies` for symmetry."""
+    price = _num(listing.get("listPrice")) or 0
+    hoa = monthly_hoa(listing)
+
+    lt = _run_strategy(price, rent_est["monthlyRent"], hoa, a)
+
+    seasonal_block = None
+    if seasonal_est and seasonal_est.get("monthlyRent"):
+        sa = {**a, **SEASONAL_OVERRIDES}
+        sb = _run_strategy(price, seasonal_est["monthlyRent"], hoa, sa)
+        seasonal_block = {
+            **sb,
+            "rentEstimate": seasonal_est,
+            "assumptionOverrides": SEASONAL_OVERRIDES,
+            "note": SEASONAL_NOTE,
+        }
+
+    out = {
+        "lastUpdated": datetime.now(timezone.utc).isoformat(),
+        "listPrice": price,
+        "rentEstimate": rent_est,
+        "capRatePct": lt["capRatePct"],
+        "noiAnnual": lt["noiAnnual"],
+        "grossYieldPct": lt["grossYieldPct"],
+        "fixedCosts": lt["fixedCosts"],
+        "scenarios": lt["scenarios"],
+        "breakEvenDownPct": lt["breakEvenDownPct"],
+        "breakEvenNote": lt["breakEvenNote"],
+        "strategies": {
+            "longTerm": {**lt, "rentEstimate": rent_est},
+            "seasonal": seasonal_block,
+            # No MLS source exists for nightly short-term rates, so this stays a
+            # structural unknown rather than a modelled number.
+            "shortTerm": {"available": False,
+                          "reason": "no MLS source for nightly short-term rates; "
+                                    "verify HOA minimum-lease terms and city STR ordinance"},
+        },
         "assumptions": {**a, "downScenarios": DOWN_SCENARIOS,
                         "note": a.get("note", LEASE_NOTE)},
     }
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -428,6 +583,7 @@ def main():
     started = time.time()
     pending: list[UpdateOne] = []
     processed = priced = no_rent = skipped_fresh = cashflowing = written = bad_price = 0
+    seasonal_priced = seasonal_cashflowing = 0
     fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=args.skip_fresh_hours)
                     if args.skip_fresh_hours else None)
 
@@ -452,11 +608,17 @@ def main():
         if not rent_est:
             no_rent += 1
             continue
+        seasonal_est = estimate_seasonal_rent(listing, zip_index, sub_index)
 
-        stats = compute_cashflow(listing, rent_est, a)
+        stats = compute_cashflow(listing, rent_est, a, seasonal_est)
         priced += 1
         if stats["scenarios"]["down20"]["cashflows"]:
             cashflowing += 1
+        seas = stats["strategies"]["seasonal"]
+        if seas:
+            seasonal_priced += 1
+            if seas["scenarios"]["down20"]["cashflows"]:
+                seasonal_cashflowing += 1
 
         if args.verbose or (args.dry_run and priced <= 3):
             d20 = stats["scenarios"]["down20"]
@@ -481,6 +643,8 @@ def main():
     print(f"Processed:        {processed:,}")
     print(f"Priced:           {priced:,}")
     print(f"  Cash-flowing@20%:{cashflowing:,}")
+    print(f"Seasonal priced:  {seasonal_priced:,}")
+    print(f"  Cash-flowing@20%:{seasonal_cashflowing:,}  (seasonal strategy)")
     print(f"No rent signal:   {no_rent:,}")
     print(f"Bad/low price:    {bad_price:,}")
     if fresh_cutoff:
