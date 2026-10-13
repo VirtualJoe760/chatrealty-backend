@@ -31,18 +31,31 @@ unified/
 ├── unified-fetch.py             ← Spark Replication API fetch (on-market statuses)
 ├── flatten.py                   ← Raw → camelCase flatten + Media preservation
 ├── seed.py                      ← Status-router: upserts into correct lifecycle collection
-├── run-pipeline.py              ← Orchestrator: fetch → flatten → seed
+├── run-pipeline.py              ← ENTRY POINT. Orchestrator: fetch → flatten → seed
 ├── update-status.py             ← Batched full-data refresher + cross-collection router
 ├── fetch-photos.py              ← Per-listing /photos → media[] inline (all 3 on-market collections)
 ├── cache-photos.py              ← Per-listing primary photo → db.photos (list/map views)
 ├── verify-db.py                 ← Read-only sanity check (counts, statuses, indexes)
-├── main.py                      ← Legacy orchestrator (kept for compatibility)
 └── closed/
     ├── README.md
     ├── fetch.py                 ← Closed-sales fetch (5-year rolling)
     ├── flatten.py
     └── seed.py                  ← Seeds directly into unified_closed_listings
 ```
+
+### Entry point
+
+**`run-pipeline.py` is the entry point.** Run the pipeline through it, not by
+calling `unified-fetch.py` / `flatten.py` / `seed.py` by hand — it passes the
+`--input`/`--output` paths between stages, and stage scripts invoked directly
+fall back to defaults that do not always match (the bug that made the closed
+sync fail 146 consecutive runs).
+
+The former `main.py` was retired on 2026-10-13 and now lives at
+`archive/mls/unified/main.py`. It chained a fourth step, `update-status.py`,
+which is **not** lost: that step is its own crontab entry at 7 AM, so the status
+pass runs on its own schedule rather than only ever running behind a fetch. See
+`archive/README.md`.
 
 ---
 
@@ -56,7 +69,7 @@ All scripts run under `/root/jpsrealtor/.venv/bin/python3`. Source of truth: `/r
 | **03:00 Sun** | `run-pipeline.py --all` | Weekly full sync (no time filter) — catches drift. |
 | **07:00 daily** | `update-status.py` | Batched (25/req) full-data refresh of every on-market doc. Routes status transitions to correct collection. Sweeps stuck Closed docs. ~90 min for ~125k docs. |
 | **08:00 daily** | `cma/build-subdivision-cma.py --all` | Rebuild `cmaStats` on every subdivision. ~55 min. |
-| **09:00 daily** | `cache-photos.py` | Cache primary photos into `db.photos` (list-view fast path). Long-running. |
+| ~~09:00 daily~~ | `cache-photos.py` | **SUSPENDED 2026-10-13.** Script and `db.photos` both retained; only the schedule is off. It upserts on `{listingId}` but `db.photos` has a UNIQUE index on `photoId` and is one-doc-per-photo (~1.06M docs / ~86k listings) from the legacy PC writer, so every insert collided with E11000 and nothing had been written since 2026-08-11. The live site is unaffected — it serves photos from `unified_listings.media[]` via `fetch-photos.py`. Retire-or-redesign decision pending. |
 | **09:30 daily** | `fetch-photos.py --all --delta` | Media[] inline delta sync on all 3 on-market collections. ~6 hours for full catch-up. |
 | **10:00 daily** | `backend/historical_closed_sync.py` | 30-day rolling closings into `unified_closed_listings`. |
 
