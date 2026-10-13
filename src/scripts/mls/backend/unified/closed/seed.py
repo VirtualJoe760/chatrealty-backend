@@ -80,7 +80,10 @@ def connect_to_mongodb(retries=3):
             client = MongoClient(
                 MONGODB_URI,
                 serverSelectionTimeoutMS=10000,
-                socketTimeoutMS=20000,
+                # 20s was not enough for bulk upserts against a 1.1M-doc
+                # collection on a managed cluster; a slow write must not look
+                # like a pipeline failure.
+                socketTimeoutMS=300000,
             )
             # Force a server selection now
             client.admin.command("ping")
@@ -449,8 +452,12 @@ def main():
                     print(f"[ERROR] Failed to seed {mls_name}: {e}")
                     continue
 
-            # Final summary
-            total_count = collection.count_documents({})
+            # Final summary.
+            # estimated_document_count() reads collection metadata in O(1).
+            # count_documents({}) scans, and on unified_closed_listings (1.1M
+            # docs) it exceeded the socket timeout and killed the process AFTER
+            # the seed had already succeeded.
+            total_count = collection.estimated_document_count()
             print("\n" + "=" * 80)
             print("BATCH SEED SUMMARY")
             print("=" * 80)
@@ -474,8 +481,8 @@ def main():
             # Seed data
             upserted, modified = seed_listings(collection, input_file, args.batch_size)
 
-            # Final count
-            total_count = collection.count_documents({})
+            # Final count — estimated, for the same reason as above
+            total_count = collection.estimated_document_count()
             print(f"\n[OK] Collection 'unified_closed_listings' now has {total_count:,} documents")
 
         # Close connection

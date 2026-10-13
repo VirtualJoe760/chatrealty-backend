@@ -289,7 +289,7 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Process all closed_5y_*_listings.json files in local-logs/closed"
+        help="Process all closed_*_listings.json files in local-logs/closed"
     )
 
     args = parser.parse_args()
@@ -343,8 +343,13 @@ def main():
     if args.input:
         input_path = Path(args.input)
     else:
-        # Look for most recent closed_5y_*_listings.json
-        candidates = sorted(local_logs.glob("closed_5y_*_listings.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # Any fetch window, not just 5y. fetch.py names its output
+        # closed_<years>y_<MLS>_listings.json and historical_closed_sync.py runs
+        # with --years 0.0821 (a 30-day window), so a hardcoded closed_5y_ glob
+        # matched nothing and every run failed here.
+        candidates = sorted(local_logs.glob("closed_*_listings.json"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        candidates = [c for c in candidates if not c.name.startswith("flattened_")]
         if not candidates:
             raise Exception(f"No closed listings files found in {local_logs}. Run fetch.py first.")
         input_path = candidates[0]
@@ -353,9 +358,11 @@ def main():
     if args.output:
         output_path = Path(args.output)
     else:
-        # Convert closed_5y_GPS_listings.json -> flattened_closed_GPS_listings.json
-        stem = input_path.stem  # "closed_5y_GPS_listings"
-        mls_part = stem.replace("closed_5y_", "")  # "GPS_listings"
+        # closed_<window>y_GPS_listings.json -> flattened_closed_GPS_listings.json
+        # Strip whatever window the file carries; a literal "closed_5y_" replace
+        # left the window in the output name for every non-5y fetch.
+        stem = input_path.stem                      # "closed_0.0821y_GPS_listings"
+        mls_part = re.sub(r"^closed_[0-9.]+y_", "", stem)   # "GPS_listings"
         output_name = f"flattened_closed_{mls_part}.json"
         output_path = local_logs / output_name
 

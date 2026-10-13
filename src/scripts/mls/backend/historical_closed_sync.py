@@ -11,8 +11,8 @@ comps.
 
 Pipeline per MLS (mirrors unified/run-pipeline.py shape):
     1. fetch  → unified/closed/fetch.py  --mls <X> --years <window>
-    2. flatten → unified/closed/flatten.py  (auto-detects most recent file)
-    3. seed    → unified/closed/seed.py     (auto-detects most recent flat file)
+    2. flatten → unified/closed/flatten.py  --input <raw> --output <flat>
+    3. seed    → unified/closed/seed.py     --input <flat>
 
 Crontab (0 10 * * *) schedules this after the 6am/7am pipeline + status jobs.
 
@@ -84,19 +84,47 @@ def _run(cmd: list[str], label: str) -> bool:
     return True
 
 
+# fetch.py writes LOCAL_LOGS_DIR / f"closed_{years}y_{MLS}_listings.json".
+# We reconstruct those paths and pass them through explicitly instead of letting
+# each stage auto-detect "the most recent file" — with 8 MLSs running in sequence
+# that heuristic is fragile, and it is what silently broke this pipeline: flatten
+# globbed a hardcoded closed_5y_* while fetch was writing closed_0.0821y_*, so
+# all 8 MLSs failed on every run for 146 consecutive runs.
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+CLOSED_DIR = PROJECT_ROOT / "local-logs" / "closed"
+
+
+def _fetch_output(mls: str, years: float) -> Path:
+    return CLOSED_DIR / f"closed_{years}y_{mls}_listings.json"
+
+
+def _flatten_output(mls: str) -> Path:
+    return CLOSED_DIR / f"flattened_closed_{mls}_listings.json"
+
+
 def sync_one_mls(mls: str, years: float) -> bool:
+    raw = _fetch_output(mls, years)
+    flat = _flatten_output(mls)
+
     # fetch
     cmd = [sys.executable, str(FETCH_PATH), "--mls", mls, "--years", str(years), "-y"]
     if not _run(cmd, f"[{mls}] fetch (last {years}y)"):
         return False
-
-    # flatten (auto-detects most recent file)
-    cmd = [sys.executable, str(FLATTEN_PATH)]
-    if not _run(cmd, f"[{mls}] flatten"):
+    if not raw.exists():
+        print(f"❌ [{mls}] fetch reported success but {raw.name} is missing — "
+              f"skipping flatten/seed so a stale file cannot be re-seeded")
         return False
 
-    # seed (auto-detects most recent flat file)
-    cmd = [sys.executable, str(SEED_PATH)]
+    # flatten — explicit in and out
+    cmd = [sys.executable, str(FLATTEN_PATH), "--input", str(raw), "--output", str(flat)]
+    if not _run(cmd, f"[{mls}] flatten"):
+        return False
+    if not flat.exists():
+        print(f"❌ [{mls}] flatten reported success but {flat.name} is missing")
+        return False
+
+    # seed — explicit in
+    cmd = [sys.executable, str(SEED_PATH), "--input", str(flat)]
     if not _run(cmd, f"[{mls}] seed"):
         return False
 
