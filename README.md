@@ -11,7 +11,6 @@ sync MLS data into MongoDB and precompute the analytics the frontend + AI chat r
 ```
 src/scripts/
 ├── mls/backend/unified/   MLS sync → unified_listings / unified_closed_listings / …
-├── fub/                   Follow Up Boss lead sync → contacts
 └── cma/                   Analytics precompute:
     ├── build-subdivision-cma.py   cmaStats (sale comps) per subdivision
     ├── build-listing-cma.py       cmaStats per active sale listing

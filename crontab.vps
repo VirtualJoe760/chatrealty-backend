@@ -2,11 +2,9 @@
 # Install with: crontab /root/jpsrealtor/crontab.vps
 # Verify with:  crontab -l
 #
-# All paths absolute. Logs land in /root/jpsrealtor/local-logs/ (or /var/log/ for FUB and MLS sync).
+# All paths absolute. Logs land in /root/jpsrealtor/local-logs/ (or /var/log/ for MLS sync).
 # Schedule rationale: docs/cma/SUBDIVISION_AND_CITY_CMA.md, docs/cma/LISTING_CMA.md.
 
-# ── FUB lead sync — every 15 min ─────────────────────────────────────────────
-*/15 * * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/fub/sync-fub-leads.py >> /var/log/fub-sync.log 2>&1
 
 # ── Listing CMA — weekly Sunday 1 AM (~11 hr full backfill) ──────────────────
 0 1 * * 0 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1
