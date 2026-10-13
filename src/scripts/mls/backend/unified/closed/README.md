@@ -1,8 +1,8 @@
 # Closed Listings Pipeline
 
-**Last Updated**: 2026-04-22
+**Last Updated**: 2026-10-13
 **Status**: Production
-**Coverage**: All 8 MLS associations
+**Coverage**: 7 of 8 MLS associations — ITECH excluded, see *MLS coverage* below
 **Data Retention**: 5-year rolling window (backfill) · 30-day rolling delta (daily)
 **Target Collection**: `unified_closed_listings` (~1.5M docs)
 
@@ -21,6 +21,57 @@ unified/closed/
 ```
 
 The root-level orchestrator `backend/historical_closed_sync.py` chains `fetch → flatten → seed` per MLS for the daily rolling delta.
+
+---
+
+## MLS coverage
+
+The closed sync covers **7** associations:
+
+```
+GPS · CRMLS · CLAW · SOUTHLAND · HIGH_DESERT · BRIDGE · CONEJO_SIMI_MOORPARK
+```
+
+### ITECH — excluded from closed sync only (2026-10-13)
+
+**ITECH is still fully active in the on-market pipeline.** Its listings fetch,
+flatten and seed normally through `unified/run-pipeline.py`, whose own
+`MLS_OPTIONS` still lists all 8. Only closed/sold sales are skipped here.
+
+On the 2026-10-13 run, 7 of 8 succeeded and ITECH failed with:
+
+```
+[ITECH] fetch (last 0.0821y) ok
+[ITECH] fetch reported success but closed_0.0821y_ITECH_listings.json is
+        missing — skipping flatten/seed so a stale file cannot be re-seeded
+```
+
+The fetch returns HTTP success but writes no closed-sales file. That pattern is
+consistent with the Spark feed not granting this account closed/sold access for
+the association, rather than a fault on our side — a real fetch failure would
+surface an HTTP error, and the file would be present but empty or malformed if
+the data were simply sparse. The missing-file guard caught it correctly and
+refused to seed, so the failure was loud instead of silently re-seeding stale
+comps.
+
+ITECH is a very small association: ~165 KB of on-market data against CRMLS's
+548 MB. Excluding its closed sales costs very little comp coverage, and keeping
+it in the list meant every run reported a failure that needed no action —
+noise that would eventually get ignored and mask a real one.
+
+Declared in `historical_closed_sync.py` as `EXCLUDED_MLS`. It remains a valid
+`--mls` / `--exclude` choice on purpose, so an explicit request prints the
+reason instead of argparse's opaque "invalid choice":
+
+```
+$ historical_closed_sync.py --mls ITECH
+[SKIP] ITECH is excluded from the closed sync: no closed/sold feed access for
+       this association (verified 2026-10-13)
+       ITECH is unaffected in the on-market pipeline (unified/run-pipeline.py).
+```
+
+Revisit if closed access is confirmed for this feed; removing the entry from
+`EXCLUDED_MLS` restores it.
 
 ---
 

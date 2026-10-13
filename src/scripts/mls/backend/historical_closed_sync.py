@@ -40,10 +40,32 @@ from datetime import datetime
 # 🔧 CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ITECH is deliberately EXCLUDED from the closed sync — see EXCLUDED_MLS below.
 MLS_OPTIONS = [
     "GPS", "CRMLS", "CLAW", "SOUTHLAND",
-    "HIGH_DESERT", "BRIDGE", "CONEJO_SIMI_MOORPARK", "ITECH",
+    "HIGH_DESERT", "BRIDGE", "CONEJO_SIMI_MOORPARK",
 ]
+
+# ── Excluded from CLOSED sync only ───────────────────────────────────────────
+# Removed 2026-10-13. Scope matters: this list drives the historical CLOSED
+# sales sync only. ITECH remains fully active in the on-market pipeline
+# (unified/run-pipeline.py MLS_OPTIONS) and its listings keep syncing normally.
+#
+# Why: on the 2026-10-13 run, 7 of 8 MLSs succeeded and ITECH failed with
+#   "fetch reported success but closed_0.0821y_ITECH_listings.json is missing"
+# The fetch returns HTTP success but produces no closed-sales file, which is
+# consistent with the Spark feed not granting this account closed/sold access
+# for that association rather than with a bug on our side. The guard added in
+# the same session caught it correctly and refused to seed a stale file, so the
+# failure was loud rather than silent.
+#
+# ITECH is a very small association — ~165 KB of on-market data against
+# CRMLS's 548 MB — so excluding its closed sales costs little, and keeping it
+# in the list meant every weekly run reported a failure that needed no action.
+# Revisit if closed access is confirmed for this feed.
+EXCLUDED_MLS = {
+    "ITECH": "no closed/sold feed access for this association (verified 2026-10-13)",
+}
 
 DEFAULT_WINDOW_DAYS = 30
 
@@ -139,9 +161,14 @@ def main():
     parser = argparse.ArgumentParser(description="Daily rolling closed-listings sync into unified_closed_listings.")
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS,
                         help=f"How far back to look (default {DEFAULT_WINDOW_DAYS} days).")
-    parser.add_argument("--mls", nargs="+", choices=MLS_OPTIONS,
-                        help="Restrict to specific MLS(s). Default: all.")
-    parser.add_argument("--exclude", nargs="+", choices=MLS_OPTIONS,
+    # Excluded names stay valid choices on purpose. Dropping them from choices
+    # would make `--mls ITECH` fail with argparse's opaque "invalid choice",
+    # leaving the next person to wonder where ITECH went. Accept it, then say
+    # why it is skipped.
+    selectable = MLS_OPTIONS + sorted(EXCLUDED_MLS)
+    parser.add_argument("--mls", nargs="+", choices=selectable,
+                        help="Restrict to specific MLS(s). Default: all non-excluded.")
+    parser.add_argument("--exclude", nargs="+", choices=selectable,
                         help="Skip specific MLS(s).")
     args = parser.parse_args()
 
@@ -150,8 +177,17 @@ def main():
     mls_list = args.mls or MLS_OPTIONS
     if args.exclude:
         mls_list = [m for m in mls_list if m not in set(args.exclude)]
+
+    # Drop permanently-excluded feeds, stating the reason rather than failing
+    # silently or reporting a failure every run.
+    for m in [m for m in mls_list if m in EXCLUDED_MLS]:
+        print(f"[SKIP] {m} is excluded from the closed sync: {EXCLUDED_MLS[m]}")
+        print(f"       {m} is unaffected in the on-market pipeline "
+              f"(unified/run-pipeline.py).", flush=True)
+    mls_list = [m for m in mls_list if m not in EXCLUDED_MLS]
+
     if not mls_list:
-        print("[ERROR] No MLSs left to process after --exclude filtering.", file=sys.stderr)
+        print("[ERROR] No MLSs left to process after exclusion filtering.", file=sys.stderr)
         sys.exit(1)
 
     start = datetime.now()
