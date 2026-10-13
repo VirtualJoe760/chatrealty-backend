@@ -78,6 +78,25 @@ def _norm(s) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def primary_photo_url(doc: dict) -> str | None:
+    """Card-sized URL for the listing's primary photo, from unified_listings.media[].
+
+    media[] is written by unified/fetch-photos.py and is what the live site reads;
+    the earlier `"photo": None` here predated it. Prefers the photo flagged
+    primary, falls back to the first, and walks the uri ladder from a card-sized
+    render down to the thumbnail.
+    """
+    media = doc.get("media") or []
+    if not media:
+        return None
+    chosen = next((m for m in media if m.get("primary")), media[0])
+    for field in ("uri640", "uri800", "uri300", "uriThumb", "uri1024", "uriLarge"):
+        url = chosen.get(field)
+        if url:
+            return url
+    return None
+
+
 def build_listing_entry(doc: dict, run_at: datetime) -> dict | None:
     listing_key = doc.get("listingKey")
     if not listing_key:
@@ -126,7 +145,7 @@ def build_listing_entry(doc: dict, run_at: datetime) -> dict | None:
         "beds": _safe_int(doc.get("bedsTotal") or doc.get("bedroomsTotal")),
         "baths": baths,
         "sqft": _safe_int(doc.get("livingArea")),
-        "photo": None,  # primaryPhotoUrl is not on unified_listings; see note
+        "photo": primary_photo_url(doc),
         "city": city or None,
         "subdivision": sub_clean,
         "status": doc.get("standardStatus"),
@@ -216,6 +235,8 @@ def main():
             "livingArea": 1,
             "city": 1, "subdivisionName": 1, "postalCode": 1,
             "standardStatus": 1, "streetName": 1, "streetNumber": 1,
+            # sliced: we only need a primary photo URL, not all ~37 photos
+            "media": {"$slice": 4},
             "_id": 0,
         },
     )
