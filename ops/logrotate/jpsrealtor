@@ -1,0 +1,62 @@
+# jpsrealtor pipeline logs — logrotate rule
+#
+# Install:  cp ops/logrotate/jpsrealtor /etc/logrotate.d/jpsrealtor
+#           chmod 644 /etc/logrotate.d/jpsrealtor
+# Validate: logrotate --debug /etc/logrotate.d/jpsrealtor
+# Force:    logrotate --force /etc/logrotate.d/jpsrealtor
+#
+# This file is the source of truth; /etc/logrotate.d/ is not in git.
+#
+# ── Why copytruncate ─────────────────────────────────────────────────────────
+# Every pipeline log is written by a cron job using shell append (`>> file`).
+# The job holds that file descriptor for its whole run, and the listing-CMA
+# backfill runs for up to 48 hours. A normal rotate renames the file, and a
+# writer holding the old fd keeps writing into the renamed inode — its output
+# would silently land in the rotated copy and then be deleted on the next
+# cycle. copytruncate copies the contents aside and truncates in place, so the
+# open fd stays valid and nothing is lost mid-run.
+#
+# ── Why *.log and never a bare glob ──────────────────────────────────────────
+# local-logs/ holds ~1.2 GB of pipeline JSON intermediates next to ~217 MB of
+# logs (all_CRMLS_listings.json alone is 548 MB). Those JSON files are live
+# stage-to-stage inputs for run-pipeline.py. Compressing or rotating them would
+# break the pipeline, so these globs match *.log ONLY. Do not widen them.
+
+/root/jpsrealtor/local-logs/*.log
+/root/jpsrealtor/local-logs/build/*.log
+/root/jpsrealtor/local-logs/closed/*.log {
+    weekly
+    rotate 4
+    # Rotate early if a single run floods the file. listing-cma-cron.log reached
+    # 116 MB and rate-profiles-cron.log 88 MB before any rotation existed.
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 644 root root
+}
+
+# MLS pipeline logs in /var/log. Same reasoning as above.
+#
+# photo-cache.log is included deliberately. Its cron is suspended as of
+# 2026-10-13, so it has no writer and will not grow — but it reached 140 MB
+# while crash-looping, and this lets that bulk age out instead of sitting there.
+#
+# fub-sync.log is also orphaned: the Follow Up Boss integration was
+# decommissioned on 2026-10-13, so nothing writes it any more. Included so its
+# 4.8 MB rotates away on its own rather than needing a manual delete.
+/var/log/mls-*.log
+/var/log/photo-cache.log
+/var/log/fub-sync.log {
+    weekly
+    rotate 4
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 644 root root
+}
