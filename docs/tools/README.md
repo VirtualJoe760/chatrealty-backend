@@ -24,7 +24,7 @@ Database: **`admin`** (yes — all app data is in `admin`; migration to
 | `subdivisions` | 1,426 | `slug` | per-community rollups |
 | `cities` | 1,047 | `slug` | per-city rollups |
 | `rent_rates` | 1,037 | `postalCode` (unique) | per-ZIP rental rollups |
-| `search_index` | 49,621 | — | search-suggest payloads |
+| `search_index` | 49,614 | — | search-suggest payloads |
 
 ## The block index
 

@@ -2,7 +2,8 @@
 
 **Producer:** `src/scripts/cma/build-cashflow.py`
 **Lives on:** `unified_listings`, every active **sale** listing (`propertyType: "A"`)
-**Coverage:** ~41,862 of 47,317 priced *(2026-10-14)*
+**Coverage:** 41,922 listings carry the block *(2026-10-14)*; the last full
+run priced 41,862 of 47,317 candidates, the rest lacking any rent signal
 **Refreshed:** Tue + Fri 2 AM
 **Backs:** `analyze_listing_cashflow`, `find_cashflowing_listings`
 
