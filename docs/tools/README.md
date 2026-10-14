@@ -37,6 +37,8 @@ Database: **`admin`** (yes — all app data is in `admin`; migration to
 | `subdivisions` | 1,426 | `slug` | per-community rollups |
 | `cities` | 1,047 | `slug` | per-city rollups |
 | `rent_rates` | 1,037 | `postalCode` (unique) | per-ZIP rental rollups |
+| `agents` | 240,236 | `_id` = `"<mlsSource>:<lower mlsId>"` | one doc per MLS agent registration |
+| `brokerages` | 29,703 | `slug` | per-brokerage-brand rollups |
 | `search_index` | 49,614 | — | search-suggest payloads |
 
 ## The block index
@@ -59,6 +61,8 @@ tool should return, and the absent case.
 | `cmaStats` | `subdivisions` | `build-subdivision-cma.py` | 1,426 | [cma-comps.md](cma-comps.md) |
 | `cmaStats` | `unified_listings` | `build-listing-cma.py` | 46,768 listings | [cma-comps.md](cma-comps.md) |
 | `rateProfile` | `unified_listings` (lease) | `build-rate-profiles.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
+| *(whole doc)* | **`agents`** | `build-agents.py` | 240,236 agents | [agents.md](agents.md) |
+| *(whole doc)* | **`brokerages`** | `build-agents.py` | 29,703 brokerages | [agents.md](agents.md) |
 
 > All coverage counts measured against production on **2026-10-14**. Most are
 > not 100% and never will be — thin markets genuinely lack comps. **Always
@@ -77,6 +81,7 @@ it when a user asks how current a figure is.
 | Daily 8 AM | `build-subdivision-cma.py --all` |
 | Daily 4 AM | `build_search_index.py` |
 | Sun 1 AM | `build-listing-cma.py --all` |
+| Tue & Fri 3 AM | `build-agents.py --all` (~17 min) |
 | Mon–Sat 9:30 AM | `build-rate-profiles.py --all` |
 | **Tue + Fri 1:30 AM** | `build-seasonal-rates` → `build-closed-seasonal-rates` |
 | **Tue + Fri 2 AM** | `build-rent-rates` → `build-pool-premium` → `build-cashflow` → `build-inventory-profile` → `build-cashflow-profile` |

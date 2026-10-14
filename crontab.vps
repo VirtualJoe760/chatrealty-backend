@@ -102,3 +102,23 @@
 
 # MongoDB backup — /usr/local/bin/backup_payload_db.sh not yet rebuilt (needs mongodb-database-tools)
 #0 2 * * * /usr/local/bin/backup_payload_db.sh >> /var/log/payload_backup.log 2>&1
+
+# ── Agent + brokerage database — Tue & Fri 3 AM (~17 min measured) ───────────
+# Builds `agents` (240,236 docs) and `brokerages` (29,703) from the listing
+# collections. MEASURED 2026-10-14 on a full --all run: 17.2 min, of which the
+# closed-listings scan is 6.7 min — it reads all 1.1M docs because closeDate is
+# mixed-type and has to be $convert-ed before the window filter can be applied,
+# which no index can serve. See docs/tools/agents.md.
+#
+# Slot choice: the 2 AM rent-rates -> cash-flow chain finishes by ~2:05, and
+# build_search_index.py starts at 4 AM. 3:00-3:17 sits cleanly between them and
+# touches none of the same documents.
+#
+# Twice weekly, not daily, for the same reason as the other refresh jobs: agent
+# production moves slowly and fidelity beats cadence. A day-old deal count is
+# not a product problem; a half-built agents collection is.
+#
+# NOT chained to anything with && — it reads the listing collections but writes
+# only its own two collections, so it cannot corrupt another job's input and
+# does not need to wait on one.
+0 3 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/agents/build-agents.py --all >> local-logs/build-agents-cron.log 2>&1

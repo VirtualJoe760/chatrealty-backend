@@ -11,6 +11,7 @@ sync MLS data into MongoDB and precompute the analytics the frontend + AI chat r
 ```
 src/scripts/
 ├── mls/backend/unified/   MLS sync → unified_listings / unified_closed_listings / …
+├── agents/                build-agents.py → agents / brokerages
 └── cma/                   Analytics precompute:
     ├── build-subdivision-cma.py   cmaStats (sale comps) per subdivision
     ├── build-listing-cma.py       cmaStats per active sale listing
@@ -31,6 +32,7 @@ src/scripts/
 | Cash-flow scoring | `build-cashflow.py` | `unified_listings.cashflowStats` |
 | Inventory mix | `build-inventory-profile.py` | `inventoryProfile` |
 | **Cash-flow rollup** | `build-cashflow-profile.py` | **`cashflowProfile`** — the one-findOne answer |
+| **Agents & brokerages** | `build-agents.py` | **`agents`** (240,236), **`brokerages`** (29,703) |
 
 ## Building AI tools against this data
 
@@ -47,6 +49,25 @@ The rental cash-flow stack powers the chat query *"show me listings in X that
 cash-flow with 20% down."* Deeper architecture notes live in
 `docs/cma/RENTAL_CASHFLOW.md`; `docs/cma/RENTAL_CASHFLOW_FRONTEND_PROMPT.md` is
 an earlier single-tool handoff, superseded for new work by `docs/tools/`.
+
+## MCP server (runs here, unlike the rest)
+
+The agent database ships with its own MCP server — the one exception to the
+"tools live in the frontend repo" rule, because it is also what Claude Code on
+this VPS uses:
+
+```bash
+.venv/bin/python src/mcp/agents_server.py                       # stdio
+.venv/bin/python src/mcp/agents_server.py \
+    --transport streamable-http --port 8787                     # hosted
+```
+
+7 tools: `search_agents`, `get_agent`, `get_agent_listings`, `rank_agents`,
+`list_brokerages`, `get_brokerage`, `agent_database_stats`. Registered for
+Claude Code in `.mcp.json`. Contract: `docs/tools/agents.md`.
+
+Whether the rest of the MCP layer should move here too — and whether the
+database should — is worked through in `docs/db/vps-migration-plan.md`.
 
 ## Setup
 

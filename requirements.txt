@@ -9,3 +9,4 @@ requests==2.33.1
 tqdm==4.67.3
 Unidecode==1.4.0
 urllib3==2.6.3
+mcp==2.3.0

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "jpsrealtor-agents": {
+      "command": "/root/jpsrealtor/.venv/bin/python",
+      "args": ["/root/jpsrealtor/src/mcp/agents_server.py"],
+      "env": {}
+    }
+  }
+}
