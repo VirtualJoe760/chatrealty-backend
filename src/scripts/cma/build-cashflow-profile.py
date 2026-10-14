@@ -14,7 +14,8 @@ Inputs it stitches together:
   cmaStats.active            build-subdivision-cma.py   price/DOM aggregates
   inventoryProfile           build-inventory-profile.py bedMix + pool prevalence
   rentStats / rent_rates     build-rent-rates.py        long-term going rate
-  rentStats.seasonal         build-seasonal-rates.py    seasonal, by bedroom
+  rentStats.seasonal         build-seasonal-rates.py    seasonal ASKING, by bed
+  rentStats.closedSeasonal   build-closed-seasonal-rates.py  seasonal ACHIEVED
   rentStats.poolPremium      build-pool-premium.py      private-pool rent lift
   cashflowStats              build-cashflow.py          breakeven + scenarios
 
@@ -22,6 +23,22 @@ Inputs it stitches together:
 * Seasonal: subdivision block if its basis is "tiered-median", else the ZIP block
   via subdivisions.dominantPostalCode, else absent. `rents.seasonal.source`
   records which was used so the answer can say so out loud.
+* Closed seasonal: the same fallback, gated on basis "closed-furnished" or
+  "closed-tail-inferred". It is reported ALONGSIDE the asking layer and never
+  merged into it — the two answer different questions (what tiered listings ask
+  for their peak months versus what seasonal leases closed at) and routinely
+  disagree. `rents.seasonalDivergence` states the peak-to-peak ratio once so no
+  consumer has to re-derive it, and `verdict.notes` says out loud when a
+  seasonal rate has no corroboration from the transaction record at all.
+  Expect `economics.closedSeasonal` to cash-flow on fewer listings than
+  `economics.seasonal` in most areas — the two annualized rents price off-peak
+  months differently (furnished asking vs achieved long-term) and off-peak is 8
+  of 12. build-cashflow.py documents the arithmetic. Fewer is the achieved layer
+  being conservative, not a discrepancy to reconcile.
+* `cashflowingAt20.top*` entries report the economics of the STRATEGY that put
+  them on the list, tagged with `strategy` and the `rentUsed` behind it. Before
+  the closed layer landed, topSeasonal quoted long-term break-even figures,
+  which described a different investment than the list it appeared in.
 * Pool premium: ZIP is PREFERRED over subdivision, because subdivision-level
   rows include the placeholder name "Other" (build-listing-cma.py documents the
   same placeholder problem) which groups unrelated properties together.
@@ -63,6 +80,9 @@ MAX_BEDS_BUCKET = 5
 BULK_BATCH = 100
 TOP_LISTINGS = 10
 PLACEHOLDER_SUBS = {"other", "unknown", "n/a", "none", "not in a development"}
+# The two bases build-closed-seasonal-rates.py publishes. Anything else (notably
+# "insufficient") means the block carries no rate and must not be composed.
+CLOSED_SEASONAL_BASES = {"closed-furnished", "closed-tail-inferred"}
 SALE_MATCH = {"$or": [{"propertyType": "A"}, {"propertyTypeName": "Residential"}]}
 
 LISTING_PROJECTION = {
@@ -168,6 +188,7 @@ def _by_bed_economics(listings: list[dict]) -> list[dict]:
             "medianSqft": _med(x.get("livingArea") for x in grp),
             "longTerm": _strategy_medians(grp, ""),
             "seasonal": _strategy_medians(grp, "seasonal"),
+            "closedSeasonal": _strategy_medians(grp, "closedSeasonal"),
         })
     return out
 
@@ -212,6 +233,62 @@ def _seasonal_rents(sub_rs: dict, zip_doc: dict | None) -> dict:
                     "state a seasonal rate"}
 
 
+def _closed_seasonal_rents(sub_rs: dict, zip_doc: dict | None) -> dict:
+    """subdivision -> ZIP -> absent, recording which was used. Same shape and
+    fallback order as _seasonal_rents, but two valid bases instead of one: the
+    cohort is identified either by the furnished field ("closed-furnished") or
+    by the 2x tail rule ("closed-tail-inferred"), and that distinction is
+    carried through as `evidence` rather than flattened away."""
+    keys = ("sampleSize", "directCount", "directShare", "longTermSampleSize",
+            "seasonalRate", "longTermBaseline", "seasonalLift",
+            "annualizedMonthlyBlended", "annualizedMonthlyPeakOnly",
+            "peakMonths", "peakMonthsSource", "window", "byBed", "quality")
+    s = (sub_rs or {}).get("closedSeasonal") or {}
+    if s.get("basis") in CLOSED_SEASONAL_BASES:
+        return {"source": "subdivision", "basis": s.get("basis"),
+                "evidence": s.get("basis"), **{k: s.get(k) for k in keys}}
+    z = (zip_doc or {}).get("closedSeasonal") or {}
+    if z.get("basis") in CLOSED_SEASONAL_BASES:
+        return {"source": "zip", "zipUsed": (z.get("geo") or {}).get("postalCode"),
+                "basis": z.get("basis"), "evidence": z.get("basis"),
+                **{k: z.get(k) for k in keys}}
+    return {"source": "insufficient", "basis": "insufficient",
+            "sampleSize": (s.get("sampleSize") or 0),
+            "note": "too few closed seasonal leases here and in the fallback ZIP "
+                    "to state an achieved seasonal rate"}
+
+
+def _seasonal_divergence(asking: dict, closed: dict) -> dict | None:
+    """The comparison both seasonal layers exist to support, computed once here
+    so every consumer doesn't re-derive it (and risk comparing an asking peak
+    against an achieved blend). Peak-to-peak only — the annualized figures use
+    different off-peak assumptions and are not comparable."""
+    a = _num(asking.get("peakRate"))
+    c = _num(closed.get("seasonalRate"))
+    if not (a and c):
+        return None
+    ratio = round(c / a, 2)
+    if ratio >= 1.15:
+        reading = ("closed leases achieved more than tiered listings ask — the "
+                   "asking layer understates the peak here")
+    elif ratio <= 0.85:
+        reading = ("closed leases achieved less than tiered listings ask — "
+                   "treat the asking peak as aspirational here")
+    else:
+        reading = "the two layers agree within 15%"
+    return {
+        "askingPeakRate": a,
+        "askingSampleSize": asking.get("sampleSize"),
+        "achievedSeasonalRate": c,
+        "achievedSampleSize": closed.get("sampleSize"),
+        "achievedToAskingRatio": ratio,
+        "reading": reading,
+        "note": "peak-to-peak comparison. The annualized figures behind each "
+                "layer rest on different off-peak assumptions and must not be "
+                "compared directly.",
+    }
+
+
 def _pool_premium(sub_rs: dict, sub_name: str, zip_doc: dict | None) -> dict:
     """ZIP preferred — subdivision rows include the placeholder name 'Other',
     which lumps unrelated properties together."""
@@ -240,6 +317,7 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
 
     lt = _strategy_medians(listings, "")
     se = _strategy_medians(listings, "seasonal")
+    cse = _strategy_medians(listings, "closedSeasonal")
 
     # Representative economics come from whichever listing carries them; the rate
     # is identical across a build so the first is representative.
@@ -266,14 +344,28 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
              .get("scenarios", {}).get("down20", {}).get("cashflows"))],
         key=lambda l: -(l["cashflowStats"]["strategies"]["seasonal"]
                         ["scenarios"]["down20"]["monthlyCashflow"]))
+    flowing_closed_seasonal = sorted(
+        [l for l in listings
+         if ((((l.get("cashflowStats") or {}).get("strategies") or {}).get("closedSeasonal") or {})
+             .get("scenarios", {}).get("down20", {}).get("cashflows"))],
+        key=lambda l: -(l["cashflowStats"]["strategies"]["closedSeasonal"]
+                        ["scenarios"]["down20"]["monthlyCashflow"]))
 
-    def _ref(l):
+    def _ref(l, path: str = ""):
+        """`path` selects which strategy's economics to report. A listing listed
+        under topSeasonal is there because its SEASONAL numbers cash-flow, so
+        quoting its long-term break-even beside it (as this did before the
+        closed layer landed) describes a different investment than the one the
+        list is about."""
         cf = l.get("cashflowStats") or {}
+        blk = cf if path == "" else ((cf.get("strategies") or {}).get(path) or {})
         return {"listingKey": l.get("listingKey"), "address": l.get("unparsedAddress"),
                 "listPrice": l.get("listPrice"), "beds": beds_bucket(l),
                 "slug": l.get("slug"),
-                "breakEvenDownPct": cf.get("breakEvenDownPct"),
-                "monthlyCashflowAt20": (cf.get("scenarios") or {})
+                "strategy": path or "longTerm",
+                "rentUsed": (blk.get("rentEstimate") or {}).get("monthlyRent"),
+                "breakEvenDownPct": blk.get("breakEvenDownPct"),
+                "monthlyCashflowAt20": (blk.get("scenarios") or {})
                                        .get("down20", {}).get("monthlyCashflow")}
 
     notes: list[str] = []
@@ -281,6 +373,29 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
     if seasonal["source"] == "zip":
         notes.append(f"seasonal rates come from ZIP {seasonal.get('zipUsed')}, not the "
                      f"subdivision itself — too few tiered lease comps locally")
+    closed_seasonal = _closed_seasonal_rents(sub_rs, zip_doc)
+    if closed_seasonal["source"] == "zip":
+        notes.append(f"achieved seasonal rates come from ZIP "
+                     f"{closed_seasonal.get('zipUsed')}, not the subdivision itself — "
+                     f"too few closed seasonal leases locally")
+    if closed_seasonal["basis"] == "closed-tail-inferred":
+        notes.append("the closed seasonal cohort was selected by price (>= 2x the cell "
+                     "median), not confirmed by the furnished field — read the achieved "
+                     "rate as indicative")
+    divergence = _seasonal_divergence(seasonal, closed_seasonal)
+    if divergence and divergence["achievedToAskingRatio"] >= 1.15:
+        notes.append(f"closed leases achieved ${divergence['achievedSeasonalRate']:,.0f} at "
+                     f"peak against ${divergence['askingPeakRate']:,.0f} asking "
+                     f"({divergence['achievedToAskingRatio']}x) — the asking layer "
+                     f"understates the peak here")
+    elif divergence and divergence["achievedToAskingRatio"] <= 0.85:
+        notes.append(f"closed leases achieved ${divergence['achievedSeasonalRate']:,.0f} at "
+                     f"peak against ${divergence['askingPeakRate']:,.0f} asking "
+                     f"({divergence['achievedToAskingRatio']}x) — treat the asking peak "
+                     f"as aspirational here")
+    if seasonal["basis"] == "tiered-median" and closed_seasonal["basis"] == "insufficient":
+        notes.append("the seasonal rate rests on asking prices only; no closed seasonal "
+                     "lease in this area corroborates it")
     pool = _pool_premium(sub_rs, geo.get("name") or geo.get("subdivisionName") or "", zip_doc)
     if pool["source"] == "insufficient":
         notes.append("no private-pool rent premium available for this area")
@@ -321,6 +436,8 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
                 "confidence": (sub_rs or {}).get("quality", {}).get("confidence"),
             },
             "seasonal": seasonal,
+            "closedSeasonal": closed_seasonal,
+            "seasonalDivergence": divergence,
             "poolPremium": pool,
         },
         "economics": {
@@ -329,11 +446,13 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
             "assumptions": assumptions,
             "longTerm": lt,
             "seasonal": se,
+            "closedSeasonal": cse,
             "byBed": _by_bed_economics(listings),
         },
         "verdict": {
             "longTerm": _verdict(lt, "long-term"),
             "seasonal": _verdict(se, "seasonal"),
+            "closedSeasonal": _verdict(cse, "achieved seasonal"),
             "shortTerm": {"status": "unclear",
                           "reason": "no MLS source carries nightly short-term rates; "
                                     "verify HOA minimum-lease terms and the city's "
@@ -343,8 +462,11 @@ def assemble_profile(scope: str, geo: dict, listings: list[dict],
         "cashflowingAt20": {
             "longTermCount": len(flowing),
             "seasonalCount": len(flowing_seasonal),
+            "closedSeasonalCount": len(flowing_closed_seasonal),
             "topLongTerm": [_ref(l) for l in flowing[:TOP_LISTINGS]],
-            "topSeasonal": [_ref(l) for l in flowing_seasonal[:TOP_LISTINGS]],
+            "topSeasonal": [_ref(l, "seasonal") for l in flowing_seasonal[:TOP_LISTINGS]],
+            "topClosedSeasonal": [_ref(l, "closedSeasonal")
+                                  for l in flowing_closed_seasonal[:TOP_LISTINGS]],
         },
         "quality": {"confidence": confidence, "notes": notes},
     }
@@ -426,6 +548,7 @@ def main():
                 print(f"  sub {i}/{len(subs)}: {str(sub.get('name'))[:30]:<30} "
                       f"n={prof['inventory']['activeCount']:<4} "
                       f"LT={v['longTerm']['status']:<10} SEAS={v['seasonal']['status']:<10} "
+                      f"CSEAS={v['closedSeasonal']['status']:<10} "
                       f"[{prof['quality']['confidence']}]")
             if args.dry_run and i <= 1:
                 print(json.dumps(prof, indent=2, default=str))

@@ -1,6 +1,6 @@
 # Showcase — Cash-Flow Rates for Palm Desert Country Club
 
-**Generated:** 2026-10-13 17:35 UTC (10:35 AM PDT)
+**Generated:** 2026-10-13 17:35 UTC (10:35 AM PDT) · **economics recomputed:** 2026-10-14 (P4.7, closed-lease layer)
 **Subdivision:** Palm Desert Country Club (`palm-desert-country-club`), Palm Desert, Riverside County
 **Acceptance goal for the overnight build:** showcase cash-flow rates for PDCC.
 
@@ -12,19 +12,28 @@ no arithmetic at read time. That was the point of the build.
 
 ## The answer, per strategy
 
-The three rental strategies are assessed separately, because they are different
-businesses with different cost structures.
+The rental strategies are assessed separately, because they are different
+businesses with different cost structures. Seasonal is scored twice — once on
+what tiered listings *ask*, once on what seasonal leases actually *closed at* —
+because those two routinely disagree and neither supersedes the other.
 
 | Strategy | Determination | Break-even down payment | Best listing needs |
 |---|---|---|---|
-| **Seasonal (furnished, Nov–Apr)** | Does not cash-flow at 20% down | **47.1%** | **23.1%** |
+| **Seasonal — achieved** (closed leases) | Does not cash-flow at 20% down | **42.1%** | 24.3% |
+| **Seasonal — asking** (tiered listings) | Does not cash-flow at 20% down | 47.1% | **23.1%** |
 | **Long-term (annual lease)** | Does not cash-flow at 20% down | **65.4%** | 41.9% |
 | **Short-term (nightly)** | **Unclear — not modelled** | n/a | n/a |
 
-**Lead finding:** seasonal is the materially better strategy here — it cuts the
-required down payment from 65.4% to 47.1%, and the best single listing in the
-subdivision gets to 23.1%, which is within reach of a conventional investor
-down payment. Long-term is not close at current rates.
+**Lead finding:** seasonal is the materially better strategy here, and both
+independent rent sources agree on that — it cuts the required down payment from
+65.4% to 42–47%, and the best single listing gets to roughly 24%, within reach
+of a conventional investor down payment. Long-term is not close at current
+rates. Nothing in PDCC cash-flows at 20% down under any strategy.
+
+The two seasonal rows differ by rent source only; the achieved row is the
+better-evidenced of the two (69 closed leases, 96% furnished-confirmed, against
+22 asking comps). See *Update 2026-10-14 — what five years of CLOSED leases
+say* below; it moves the strongest bedroom cell from 4bd to 3bd.
 
 **Short-term is unclear, not negative.** No MLS source carries nightly rates, so
 a number here would be invention. To price it you would need to verify the HOA
@@ -32,7 +41,12 @@ minimum-lease term and the City of Palm Desert short-term-rental ordinance.
 PDCC is not gated (0% of inventory), and 57% of pools are association-owned
 rather than private, both of which bear on short-term viability.
 
-### The strongest cell: 4-bedroom, seasonal
+### The strongest cell on asking rates: 4-bedroom, seasonal
+
+> **Superseded in part.** This section reports the *asking* layer. The closed-lease
+> layer below puts the achieved 4bd rate below these asking figures and moves the
+> break-even from 28.7% to 35.8%, making 3bd the better-evidenced cell. Read both.
+
 
 | | 2bd | 3bd | **4bd** |
 |---|---|---|---|
@@ -44,11 +58,12 @@ rather than private, both of which bear on short-term viability.
 | DSCR @ 20% down | 0.66 | 0.59 | **0.89** |
 | Long-term break-even down | 58.7% | 65.4% | 72.1% |
 
-The 4-bedroom seasonal case is the one worth a second look: **−$302/month at 20%
-down, DSCR 0.89, break-even at 28.7%.** It is driven by the 4bd seasonal rate
-($11,275 peak / $4,950 off-peak, annualized $6,229) — but note that rate rests on
-**only 2 lease comps**. That is the thinnest number in this report and the one to
-verify before acting on it.
+The 4-bedroom seasonal case looks like the one worth a second look: **−$302/month
+at 20% down, DSCR 0.89, break-even at 28.7%.** It is driven by the 4bd seasonal
+rate ($11,275 peak / $4,950 off-peak, annualized $6,229) — but that rate rests on
+**only 2 lease comps**. That was flagged as the thinnest number in this report
+and the one to verify before acting on it; the closed-lease layer below is that
+verification, and it does not hold up.
 
 ---
 
@@ -134,9 +149,44 @@ the 4bd cell is still thin, but it is 5 achieved closings rather than 2
 asking prices, and the blended annualized figure for the ZIP is $5,200/mo
 against the $4,392 used in the economics below.
 
-The economics in this report have **not** been recomputed against the closed
-layer — wiring `closedSeasonal` into `build-cashflow-profile.py` is tracked
-separately as P4.7, because it moves investor-facing numbers.
+**Recomputed against the closed layer (P4.7).** `closedSeasonal` is now a
+third scored strategy, carried through `build-cashflow.py` into
+`cashflowProfile.economics.closedSeasonal`. For the same 15 PDCC listings:
+
+| strategy | rent used | median CF @20% | median break-even down | best listing | cap |
+|---|---|---|---|---|---|
+| Long-term | $2,712 | −$1,664 | 65.4% | 41.9% | 2.87% |
+| Seasonal (asking) | $4,704 | −$841 | 47.1% | **23.1%** | 4.40% |
+| Closed seasonal (achieved) | $5,400 | −$811 | **42.1%** | 24.3% | 4.81% |
+
+**The achieved layer does not rescue PDCC.** It raises the rent used by $696/mo
+and pulls the median break-even down 5 points, but nothing cash-flows at 20%
+down under any of the three, and the best individual listing is marginally
+*worse* on achieved rates (24.3% vs 23.1%) than on asking. The verdict is
+unchanged: this is an appreciation/lifestyle community, not a cash-flow one.
+
+**And it moves the strongest cell from 4bd to 3bd.** Achieved rents only beat
+asking at 3bd; at 2bd and 4bd they come in lower, and the break-even moves with
+them:
+
+| beds | n | rent asking → achieved | break-even asking → achieved | cap asking → achieved |
+|---|---|---|---|---|
+| 2bd | 3 | $3,754 → $3,633 | 47.1% → 49.5% | 4.40% → 4.20% |
+| 3bd | 9 | $4,704 → **$5,400** | 53.0% → **42.1%** | 3.91% → **4.81%** |
+| 4bd | 3 | $6,229 → $5,800 | 28.7% → 35.8% | 5.92% → 5.34% |
+
+The 4bd seasonal headline rested on 2 active asking comps. Five years of ZIP
+closings put the achieved 4bd blend *below* that asking figure and push its
+break-even from 28.7% to 35.8%. Two independent checks — no seasonal closings
+in PDCC at all, and a lower achieved 4bd rate at ZIP level — now point the same
+way, so the 4bd cell should not be quoted as the seasonal opportunity here.
+
+On achieved rates the best cell is **3bd**: break-even 42.1% on 9 listings,
+backed by 55 closed 3bd leases in the ZIP, against 2 asking comps behind the
+old 4bd number. It is a worse headline resting on far better evidence.
+
+`rents.seasonalDivergence` records the peak-to-peak comparison (1.67x here) on
+every profile, so this check no longer requires reading two layers by hand.
 
 ### Private-pool premium — unavailable here, honestly
 `insufficient`. No bedroom+subtype cell had enough private-pool *and* no-pool

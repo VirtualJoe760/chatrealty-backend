@@ -14,6 +14,40 @@ listing (propertyType "A") in unified_listings, this:
      standard down-payment scenarios and writes a `cashflowStats` block onto the
      listing.
 
+── The three rent strategies under `strategies` ──────────────────────────────
+  longTerm        annual lease, from build-rent-rates.py
+  seasonal        furnished peak-season ASKING rates, from build-seasonal-rates.py
+  closedSeasonal  furnished peak-season ACHIEVED rates, from
+                  build-closed-seasonal-rates.py (closed leases)
+
+The two seasonal layers are scored separately and never merged. They answer
+different questions — what tiered listings ask for their peak months versus
+what seasonal leases actually closed at — and they routinely disagree by a wide
+margin (92211: $6,000 asking peak against $10,000 achieved, n=69). Both are
+real; collapsing them into one number would throw away the comparison. Neither
+feeds the top-level (long-term) figures the existing MCP queries read.
+
+── Why the achieved layer scores more conservatively than asking ─────────────
+The two annualized figures are built on different OFF-PEAK assumptions, and
+off-peak is 8 of 12 months, so it dominates:
+
+  seasonal.annualizedMonthly        every month at one of the listing's own
+                                    furnished asking tiers (92211: off-peak
+                                    $3,500)
+  closedSeasonal.annualizedMonthlyBlended
+                                    peak at the achieved seasonal rate, off-peak
+                                    at the achieved LONG-TERM baseline (92211:
+                                    $2,800 — unfurnished annual)
+
+So the achieved layer only comes out ahead where the peak lift is large enough
+to outrun that off-peak drag. 92211 3bd: achieved $5,400 vs asking $4,704
+(peak $10,000 vs $6,000 wins). 92211 4bd: achieved $5,800 vs asking $6,229
+(peak ties at $10,000, so the cheaper off-peak decides it). Expect the achieved
+strategy to cash-flow on FEWER listings in most areas. That is the layer being
+conservative, not broken — nobody has achieved-furnished off-peak rates,
+because a furnished off-peak lease is rare enough that inferring one would be
+invention.
+
 That makes the MCP / chat query "show me listings in X that cash-flow with 20%
 down" a plain Mongo filter+sort:
 
@@ -83,6 +117,21 @@ SEASONAL_OVERRIDES = {
 SEASONAL_NOTE = ("Seasonal strategy uses annualizedMonthly (sum(tier rate x months) / 12) "
                  "as gross rent — never the peak rate — with vacation-rental management, "
                  "vacancy and maintenance assumptions.")
+
+# The closed-lease seasonal layer (build-closed-seasonal-rates.py) describes the
+# same operating business as the active one — furnished, high turnover, managed
+# at vacation-rental rates — so it reuses SEASONAL_OVERRIDES unchanged. Keeping
+# the assumptions identical is the point: the two strategies then differ ONLY by
+# their rent source (what tiered listings ask vs what seasonal leases closed
+# at), which is the comparison this layer exists to make.
+CLOSED_SEASONAL_BASES = {"closed-furnished", "closed-tail-inferred"}
+CLOSED_SEASONAL_NOTE = (
+    "Closed-seasonal strategy uses annualizedMonthlyBlended (peak months at the "
+    "ACHIEVED seasonal rate, the balance at the achieved long-term baseline, / 12) "
+    "as gross rent — never seasonalRate — with the same vacation-rental "
+    "management, vacancy and maintenance assumptions as the seasonal strategy. "
+    "These are rates leases actually closed at, not asking rates, and the two "
+    "layers routinely disagree; neither supersedes the other.")
 BULK_BATCH = 500
 MIN_LIST_PRICE = 25000           # below this, the listPrice is junk or a misclassified
                                  # rental — skip so it can't top the cash-flow sort
@@ -400,6 +449,104 @@ def estimate_seasonal_rent(listing: dict, zip_index: dict, sub_index: dict) -> d
     return None
 
 
+def _closed_blended(s_rate, lt_base, n_peak):
+    """The same arithmetic build-closed-seasonal-rates.py uses for
+    annualizedMonthlyBlended: peak months at the achieved seasonal rate, the
+    balance at the achieved long-term baseline. Recomputed here per bedroom
+    because `byBed` stores the two component rates, not the blend. Requires a
+    baseline for exactly the upstream reason — without one, the off-peak months
+    have no achieved rent to stand on."""
+    if not (s_rate and lt_base and n_peak):
+        return None
+    n_peak = min(n_peak, 12)
+    return int(round((s_rate * n_peak + lt_base * (12 - n_peak)) / 12))
+
+
+def _closed_seasonal_bed(block: dict, beds_b):
+    """Bedroom-matched blended rate from a `closedSeasonal` block. byBed already
+    nulls seasonalRate below MIN_SEASONAL and longTermBaseline below
+    MIN_BASELINE, so a cell carrying both has cleared the builder's own
+    thresholds — no second gate is applied here."""
+    if beds_b is None:
+        return None, 0
+    n_peak = len(block.get("peakMonths") or [])
+    for e in block.get("byBed") or []:
+        if e.get("beds") != beds_b:
+            continue
+        return (_closed_blended(_num(e.get("seasonalRate")),
+                                _num(e.get("longTermBaseline")), n_peak),
+                e.get("count", 0))
+    return None, 0
+
+
+def _closed_seasonal_payload(block: dict, rent, source, confidence, sample):
+    """NOTE: monthlyRent is annualizedMonthlyBlended, never seasonalRate. The
+    achieved peak rate rides along for display, as does the peak-only floor
+    (off-peak months empty) so a consumer can see both ends of the range.
+
+    `evidence` and `directShare` travel with the estimate because the cohort is
+    identified two different ways — the furnished field (direct) or the 2x tail
+    rule (inferred) — and that distinction changes how much weight it deserves."""
+    return {
+        "monthlyRent": rent,
+        "basis": "annualizedMonthlyBlended",
+        "source": source,
+        "confidence": confidence,
+        "sampleSize": sample,
+        "evidence": block.get("basis"),
+        "directShare": block.get("directShare"),
+        "seasonalRate": block.get("seasonalRate"),
+        "longTermBaseline": block.get("longTermBaseline"),
+        "seasonalLift": block.get("seasonalLift"),
+        "annualizedMonthlyPeakOnly": block.get("annualizedMonthlyPeakOnly"),
+        "peakMonths": block.get("peakMonths") or [],
+        "window": block.get("window"),
+        "geo": block.get("geo"),
+    }
+
+
+def estimate_closed_seasonal_rent(listing: dict, zip_index: dict,
+                                  sub_index: dict) -> dict | None:
+    """Achieved seasonal gross rent, from the closed-lease layer written by
+    build-closed-seasonal-rates.py. Same subdivision -> ZIP -> None fallback as
+    estimate_seasonal_rent, and it never extrapolates from an insufficient block.
+
+    This runs ALONGSIDE the active seasonal strategy, not instead of it. One is
+    what tiered listings ask, the other what seasonal leases closed at; they
+    routinely disagree (92211: $6,000 asking peak against $10,000 achieved,
+    n=69), so merging them would destroy the only signal worth having."""
+    beds_b = beds_bucket(listing.get("bedsTotal"))
+    name = (listing.get("subdivisionName") or "").strip().lower()
+    city = (listing.get("city") or "").strip().lower()
+
+    sub = sub_index.get((city, name)) if name else None
+    if sub:
+        s = sub.get("closedSeasonal") or {}
+        if s.get("basis") in CLOSED_SEASONAL_BASES:
+            r, n = _closed_seasonal_bed(s, beds_b)
+            if r:
+                return _closed_seasonal_payload(
+                    s, r, "subdivision-closed-seasonal-bedroom", "high", n)
+            if _num(s.get("annualizedMonthlyBlended")):
+                return _closed_seasonal_payload(
+                    s, _num(s.get("annualizedMonthlyBlended")),
+                    "subdivision-closed-seasonal-area", "medium", s.get("sampleSize", 0))
+
+    zdoc = zip_index.get(listing.get("postalCode"))
+    if zdoc:
+        s = zdoc.get("closedSeasonal") or {}
+        if s.get("basis") in CLOSED_SEASONAL_BASES:
+            r, n = _closed_seasonal_bed(s, beds_b)
+            if r:
+                return _closed_seasonal_payload(
+                    s, r, "zip-closed-seasonal-bedroom", "medium", n)
+            if _num(s.get("annualizedMonthlyBlended")):
+                return _closed_seasonal_payload(
+                    s, _num(s.get("annualizedMonthlyBlended")),
+                    "zip-closed-seasonal-area", "low", s.get("sampleSize", 0))
+    return None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 💵 CASH-FLOW MATH
 # ──────────────────────────────────────────────────────────────────────────────
@@ -460,25 +607,31 @@ def _run_strategy(price: float, gross_rent: float, hoa: float, a: dict) -> dict:
 
 
 def compute_cashflow(listing: dict, rent_est: dict, a: dict,
-                     seasonal_est: dict | None = None) -> dict:
+                     seasonal_est: dict | None = None,
+                     closed_seasonal_est: dict | None = None) -> dict:
     """Long-term result stays at the top level unchanged — the MCP tools already
     query cashflowStats.scenarios.down20 — with breakEvenDownPct added beside it
-    and both strategies also grouped under `strategies` for symmetry."""
+    and every strategy also grouped under `strategies` for symmetry."""
     price = _num(listing.get("listPrice")) or 0
     hoa = monthly_hoa(listing)
 
     lt = _run_strategy(price, rent_est["monthlyRent"], hoa, a)
 
-    seasonal_block = None
-    if seasonal_est and seasonal_est.get("monthlyRent"):
+    def _furnished_strategy(est: dict | None, note: str) -> dict | None:
+        """Both seasonal layers are the same business on different rent sources,
+        so they share one code path and can differ only by that rent."""
+        if not (est and est.get("monthlyRent")):
+            return None
         sa = {**a, **SEASONAL_OVERRIDES}
-        sb = _run_strategy(price, seasonal_est["monthlyRent"], hoa, sa)
-        seasonal_block = {
-            **sb,
-            "rentEstimate": seasonal_est,
+        return {
+            **_run_strategy(price, est["monthlyRent"], hoa, sa),
+            "rentEstimate": est,
             "assumptionOverrides": SEASONAL_OVERRIDES,
-            "note": SEASONAL_NOTE,
+            "note": note,
         }
+
+    seasonal_block = _furnished_strategy(seasonal_est, SEASONAL_NOTE)
+    closed_seasonal_block = _furnished_strategy(closed_seasonal_est, CLOSED_SEASONAL_NOTE)
 
     out = {
         "lastUpdated": datetime.now(timezone.utc).isoformat(),
@@ -494,6 +647,9 @@ def compute_cashflow(listing: dict, rent_est: dict, a: dict,
         "strategies": {
             "longTerm": {**lt, "rentEstimate": rent_est},
             "seasonal": seasonal_block,
+            # Achieved rates from closed leases. Additive and deliberately not
+            # merged with `seasonal` — see CLOSED_SEASONAL_NOTE.
+            "closedSeasonal": closed_seasonal_block,
             # No MLS source exists for nightly short-term rates, so this stays a
             # structural unknown rather than a modelled number.
             "shortTerm": {"available": False,
@@ -584,6 +740,7 @@ def main():
     pending: list[UpdateOne] = []
     processed = priced = no_rent = skipped_fresh = cashflowing = written = bad_price = 0
     seasonal_priced = seasonal_cashflowing = 0
+    closed_seasonal_priced = closed_seasonal_cashflowing = 0
     fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=args.skip_fresh_hours)
                     if args.skip_fresh_hours else None)
 
@@ -609,8 +766,9 @@ def main():
             no_rent += 1
             continue
         seasonal_est = estimate_seasonal_rent(listing, zip_index, sub_index)
+        closed_seasonal_est = estimate_closed_seasonal_rent(listing, zip_index, sub_index)
 
-        stats = compute_cashflow(listing, rent_est, a, seasonal_est)
+        stats = compute_cashflow(listing, rent_est, a, seasonal_est, closed_seasonal_est)
         priced += 1
         if stats["scenarios"]["down20"]["cashflows"]:
             cashflowing += 1
@@ -619,6 +777,11 @@ def main():
             seasonal_priced += 1
             if seas["scenarios"]["down20"]["cashflows"]:
                 seasonal_cashflowing += 1
+        cseas = stats["strategies"]["closedSeasonal"]
+        if cseas:
+            closed_seasonal_priced += 1
+            if cseas["scenarios"]["down20"]["cashflows"]:
+                closed_seasonal_cashflowing += 1
 
         if args.verbose or (args.dry_run and priced <= 3):
             d20 = stats["scenarios"]["down20"]
@@ -644,7 +807,9 @@ def main():
     print(f"Priced:           {priced:,}")
     print(f"  Cash-flowing@20%:{cashflowing:,}")
     print(f"Seasonal priced:  {seasonal_priced:,}")
-    print(f"  Cash-flowing@20%:{seasonal_cashflowing:,}  (seasonal strategy)")
+    print(f"  Cash-flowing@20%:{seasonal_cashflowing:,}  (seasonal strategy, asking)")
+    print(f"Closed-seas priced:{closed_seasonal_priced:,}")
+    print(f"  Cash-flowing@20%:{closed_seasonal_cashflowing:,}  (closedSeasonal strategy, achieved)")
     print(f"No rent signal:   {no_rent:,}")
     print(f"Bad/low price:    {bad_price:,}")
     if fresh_cutoff:

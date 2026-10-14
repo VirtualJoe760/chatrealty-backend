@@ -105,6 +105,36 @@ MONTHLY rate. Only `annualizedMonthlyBlended` (peak months at the seasonal
 rate, the rest at the long-term baseline) and `annualizedMonthlyPeakOnly`
 (the rest at zero — the floor) may feed cash-flow math.
 
+### Both layers reach the cash-flow stack (P4.7)
+
+`build-cashflow.py` scores them as two separate strategies per listing —
+`strategies.seasonal` (asking) and `strategies.closedSeasonal` (achieved) —
+sharing one code path and one set of `SEASONAL_OVERRIDES`, so they can differ
+only by their rent. `build-cashflow-profile.py` then composes both into
+`cashflowProfile`, with `rents.seasonalDivergence` recording the peak-to-peak
+ratio once so no consumer re-derives it (and risks comparing an asking peak
+against an achieved blend).
+
+The closed layer covers **6x more inventory**: 18,835 active listings get an
+achieved-seasonal score against 3,159 on the asking layer, because tiered
+active listings are scarce while closed leases are not.
+
+**Expect the achieved strategy to cash-flow on fewer listings anyway**, and know
+why before treating it as a discrepancy. The two annualized rents price
+off-peak months differently, and off-peak is 8 of 12:
+
+| | off-peak months priced at |
+|---|---|
+| `seasonal.annualizedMonthly` | the listing's own furnished ASKING tier (92211: $3,500) |
+| `closedSeasonal.annualizedMonthlyBlended` | the achieved LONG-TERM baseline (92211: $2,800 — unfurnished annual) |
+
+So the achieved layer only wins where the peak lift outruns that off-peak drag.
+92211 3bd: $5,400 achieved vs $4,704 asking (peak $10,000 vs $6,000 wins).
+92211 4bd: $5,800 vs $6,229 (peak ties at $10,000, so cheaper off-peak decides
+it). Nobody has achieved-furnished off-peak rates — a furnished off-peak lease
+is rare enough that inferring one would be invention — so the conservative
+blend is the honest one.
+
 ---
 
 Financing defaults (all CLI-overridable, echoed into `cashflowStats.assumptions`): 7.0%/30-yr loan, 1.25% tax (derived from price — no `taxAnnualAmount` in MLS; Mello-Roos not modeled), 0.4% insurance, 5% vacancy, 8% management, 5% maintenance, 3% closing.
