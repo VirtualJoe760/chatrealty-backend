@@ -5,9 +5,16 @@ frontend repo**. This backend repo computes and stores; your repo reads and
 serves. These docs are the contract between the two.
 
 **Read `docs/strategies/tool-development.md` first.** It explains why the data is
-shaped this way. The short version: **the model must never calculate.** Every
-figure here was computed offline by a cron job. Your MCP tool does one `findOne`
-or one indexed `find` and returns the block.
+shaped this way and walks through the **four shapes of tool** — look up a
+precomputed answer, list the options, rank by a stat, or write a record — each
+with its own rules.
+
+The short version: **the AI must never calculate.** Everything indexed below was
+computed offline by a cron job; the tool does one `findOne` and returns the
+block. Note that not every tool needs precomputing — listing the subdivisions in
+a city is just an indexed query, and ranking tools mostly need an index plus
+sanity guards. The strategy doc covers when you need a script here and when you
+don't.
 
 ---
 

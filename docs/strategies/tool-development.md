@@ -1,167 +1,292 @@
 # Strategy — Tool Development
 
-**Audience:** anyone adding an AI-facing capability to chatrealty, on either side of
-the repo split. Read this before writing a builder script *or* an MCP tool.
+**Who this is for:** anyone adding an AI capability to chatrealty, on either side
+of the repo split.
 
-**The one-line version:** the model should never calculate. It should look up a
-number a Python job already calculated, and say where that number came from.
+**How the split works.** This repo (the VPS) holds Python scripts and the
+database. The MCP tools live in the frontend repo. The scripts here prepare
+answers and keep the data clean; the MCP tools look those answers up. Neither
+the tool nor the AI does analysis.
+
+**The whole idea in one sentence:** if the AI has to think about it, we got it
+wrong — it should be looking something up.
 
 ---
 
-## 1 · The problem this solves
+## Why this matters
 
-An LLM asked "would this Palm Desert condo cash-flow as a rental?" will, left to
-itself, try to *do the work*: pull comps, pull lease listings, guess a rent,
-guess taxes and insurance, amortize a loan, and narrate the arithmetic. That
-approach fails four ways at once.
+Ask the AI *"would this Palm Desert condo cash-flow as a rental?"* and, with no
+tool to call, it will try to do the job itself: pull comps, pull lease listings,
+guess a rent, guess taxes and insurance, amortize a loan, and narrate the math.
+That costs tens of thousands of tokens, takes 30 seconds, gives a different
+answer every time, and when it's wrong you can't tell whether the data or the
+AI's arithmetic was at fault.
 
-| Failure | Why it happens |
-|---|---|
-| **Cost** | Tens of thousands of tokens per answer, most of it raw listing JSON the user never sees. Multiply by every session. |
-| **Latency** | Several tool round-trips plus the model's own reasoning. A question that should take 200 ms takes 30 s. |
-| **Inconsistency** | The same question asked twice gets two different rents, because nothing pinned the comp set or the assumptions. |
-| **Unauditability** | When a number is wrong you cannot tell whether the data, the comp selection, or the model's mental math was at fault. |
+With a tool, that same question is one database lookup and a few hundred tokens.
 
-Worse, the model is *confidently* wrong in a domain where being wrong has
-consequences. A fabricated rent estimate presented to an investor is not a
-rounding error.
+But **not every tool needs precomputing.** "How many subdivisions are in Palm
+Desert" doesn't need a nightly job — it needs one indexed query. Knowing which
+kind of tool you're building is the first decision, and it changes the rules.
 
-## 2 · The pattern: precompute, then serve
+---
 
-Split every capability into two halves that meet at a stored document.
+## The four shapes of tool
+
+| Shape | Example question | How it works | Needs a script here? |
+|---|---|---|---|
+| **1. Look up** | "Would this cash-flow?" | read a precomputed block | **Yes** — analysis must happen offline |
+| **2. List** | "What subdivisions are in Palm Desert?" | indexed `find` + tight projection | **No** — if the index exists |
+| **3. Rank** | "Biggest house? Longest on market?" | indexed `find` + `sort` + `limit` | **Sometimes** — see below |
+| **4. Write** | "Create a new subdivision" | validated insert/update | **Yes** — a bad write poisons every later answer |
+
+Most token waste is not from missing precompute. It's from **returning too much
+JSON**. Sending 50 full listing documents to answer "which is the biggest house"
+is ~200 KB; sending one record with eight fields is ~200 bytes. Shapes 2 and 3
+save tokens mostly through tight projections, not through precomputing.
+
+---
+
+## Shape 1 — Look up a precomputed answer
+
+Use this when answering requires *analysis*: medians, comp selection, financing
+math, confidence judgments.
+
+A script here does all of it on a schedule and saves a self-describing block on
+a document. The block holds the figures **and** everything needed to caveat them
+— sample sizes, where the data came from, confidence, and plain-language notes.
+The tool returns the block whole.
+
+Example that already exists: `cashflowProfile` on `subdivisions` and `cities`.
+One `findOne` by slug returns four rental strategies, per-bedroom economics,
+rent provenance and caveats. See `docs/tools/cashflow-profile.md`.
+
+## Shape 2 — List the options
+
+Use this for "what are my choices here" questions. **Usually needs no new
+script.** Your example — all subdivisions in a city — is already a fast indexed
+query, because `subdivisions` is indexed on `city`:
+
+```js
+db.subdivisions
+  .find({ city: "Palm Desert" }, { name: 1, slug: 1, listingCount: 1, _id: 0 })
+  .sort({ name: 1 })
+// 90 subdivisions in Palm Desert
+```
+
+Rules for list tools:
+
+- **Project only the fields the AI needs.** A subdivision document is large;
+  `name` + `slug` + a count is usually all a picker needs.
+- **Always return the `slug`**, so the AI can chain into a detail tool without
+  guessing an identifier.
+- **Sort deterministically** (name, or count descending). An unsorted list
+  changes between calls and makes the AI look unreliable.
+- **Cap the result and say you capped it.** 90 is fine to return; 1,400 is not.
+- **Confirm the index exists** before shipping, or it collscans.
+
+## Shape 3 — Find the best or worst by a stat
+
+"Biggest house", "longest on market", "lowest price per square foot." These are
+sorts, not analysis — *provided* the thing you're sorting by is a real, indexed,
+populated field. Checked against production on 2026-10-14, that is not always
+true:
+
+| Question | Field to sort | Status today |
+|---|---|---|
+| Biggest house | `livingArea` desc | ✅ populated (99.8%); needs a `city + livingArea` index |
+| Longest on market | `onMarketDate` **asc** | ✅ populated (100%) and indexed |
+| Most expensive | `listPrice` desc | ✅ populated and well indexed |
+| Lowest price per sqft | — | ❌ **no such field exists** — needs a script |
+
+Three things to understand here:
+
+**Oldest on-market date *is* longest days-on-market.** You don't need to compute
+or store DOM — sorting `onMarketDate` ascending gives the identical ordering and
+uses an existing index. Prefer a proxy you can index over a value you have to
+calculate.
+
+**Price per square foot has to be precomputed.** It's `listPrice / livingArea`,
+and a database cannot index a value it doesn't store. Either a script writes a
+`pricePerSqft` field (then it's indexable and this becomes a plain sort), or
+every query aggregates across 47,317 listings. Write the field.
+
+**Superlatives land on your worst data.** This is the big one. The honest
+answer to "cheapest sale listing in Palm Desert" today is:
 
 ```
-   ┌─ BACKEND (this repo, Python, cron) ──────────────────────────────┐
-   │  MLS feed → unified_listings / unified_closed_listings           │
-   │       ↓                                                          │
-   │  builder script: does ALL the analysis, once, offline             │
-   │       ↓                                                          │
-   │  writes a self-describing block onto a document                  │
-   └──────────────────────────────┬───────────────────────────────────┘
-                                  │   MongoDB
-   ┌──────────────────────────────┴───────────────────────────────────┐
-   │  MCP tool: ONE findOne / ONE indexed find. No math.              │
-   │       ↓                                                          │
-   │  model receives a small, complete, pre-reasoned answer           │
-   └──────────────────────────────────────────────────────────────────┘
+$795      800 sqft   77955 Calle Las Brisas South     ← misclassified rental
+$12,500  1383 sqft   43712 Avenida Alicante           ← bad data
+$210,000  522 sqft   73850 Fairway Drive, 14          ← the real answer
 ```
 
-The stored block is the contract. Everything the model needs to answer *and
-caveat* the question lives in it — the figures, the sample sizes, the
-provenance, the confidence, and plain-language notes about what is shaky.
+A sort by price has no judgment. It will hand the AI a $795 house and the AI
+will report it confidently. `build-cashflow.py` guards this with a $25,000
+floor; **every ranking tool needs equivalent guards** — a price floor, a
+non-zero `livingArea`, a plausible range. Without them, the tool's headline
+result is its worst record.
 
-### What this buys
+**Also: don't trust an index to mean a field exists.** `unified_listings` has
+indexes named `daysOnMarket_listPrice`, `beds_baths_listPrice` and
+`city_beds_listPrice`, but `daysOnMarket`, `beds` and `baths` are **0%
+populated** — the real fields are `bedsTotal` and `bathroomsTotalInteger`.
+Sorting by `daysOnMarket` returns nothing useful. Verify coverage before you
+sort on anything.
 
-- A cash-flow answer for a whole subdivision is **one `findOne` by slug**.
-  Three rental strategies, per-bedroom breakdowns, rent provenance, and the
-  caveats come back in a few KB.
-- The answer is **identical** every time until the next cron run, and the
-  `lastUpdated` field says when that was.
-- A number can be traced to the script that produced it and the sample it came
-  from. `build-cashflow-profile.py` computes no economics of its own — it is
-  medians over per-listing `cashflowStats` — so a rollup can never disagree with
-  the listing detail a user drills into.
+## Shape 4 — Create or change a record
 
-## 3 · Non-negotiable rules
+Writes are different in kind: a bad write doesn't give one wrong answer, it
+poisons every answer that reads it afterwards. Your "create a new subdivision"
+tool lives here.
 
-These exist because each one has already cost us a real bug.
+**What a subdivision document needs to actually work:**
 
-**1. Never compute at request time.** If an MCP tool needs arithmetic beyond
-reading a field, the arithmetic belongs in a builder. The sole exception:
-re-deriving cash flow for a *user-supplied* down payment or rate, which is
-trivial arithmetic over stored `fixedCosts` — that is why `fixedCosts` is
-stored. Rent estimation is the expensive part and it is precomputed.
+```js
+{
+  name: "Palm Desert Country Club",      // must match the MLS spelling
+  slug: "palm-desert-country-club",       // lowercase, hyphenated, unique
+  normalizedName: "palm desert country club",  // lowercase name
+  city: "Palm Desert",
+  county: "Riverside",
+  region: "Coachella Valley",
+  coordinates: { latitude: 33.7364, longitude: -116.3178 },
+  hasManualData: true                     // marks it hand-created
+}
+```
 
-**2. A missing signal is `unclear`, never a number, and never `negative`.**
-Those are different answers to an investor. Short-term nightly rates do not
-exist in any MLS feed, so `verdict.shortTerm.status` is permanently `unclear`
-with a reason telling the user what to verify. Modelling it would be invention.
+**The trap that will silently break it:** `build-subdivision-cma.py` finds a
+subdivision's listings by **case-insensitive exact match** of
+`unified_listings.subdivisionName` against the subdivision's `name`. So if you
+create *"Palm Desert CC"* but the MLS writes *"Palm Desert Country Club"*, the
+record is valid, looks fine, and gets **zero comps forever**. Before creating
+one, check what the MLS actually calls it:
 
-**3. Sample size travels with every estimate.** A rate built on 2 comps and a
-rate built on 69 closings must not look alike to the consumer. Every block
-carries `sampleSize` and a `quality.confidence` of `good` / `fair` /
-`insufficient`.
+```js
+db.unified_listings.distinct("subdivisionName", { city: "Palm Desert" })
+```
 
-**4. Respect unit discipline — it is the easiest way to be wrong by 2x.** A
-seasonal *peak* rate is not a monthly income figure. `seasonalRate` ($10,000 in
-ZIP 92211) describes four peak months; feeding it into a payment calculation
-overstates annual income roughly 2x. Only the `annualizedMonthly*` fields may
-touch cash-flow math. Builders state this in their docstrings; tools must honor
-it.
+Rules for write tools:
 
-**5. Independent sources stay separate. Never silently blend.** We have two
-seasonal rent layers: what tiered listings *ask* and what leases *closed at*.
-In ZIP 92211 they disagree by 1.67x ($6,000 vs $10,000) and **both are
-correct** — they answer different questions. They are stored as `seasonal` and
-`closedSeasonal` and scored as separate strategies. Averaging them would
-destroy the only signal worth having. Where a comparison is useful, compute it
-once and store it (`rents.seasonalDivergence`) rather than leaving every
-consumer to re-derive it and risk comparing an asking peak against an achieved
-blend.
+- **Upsert on `slug`, never blind-insert.** If the tool is called twice — a
+  retry, a double-click — you get two subdivisions competing for the same
+  listings. Make the write idempotent.
+- **Derive `slug` and `normalizedName` from `name`**, don't accept them as
+  input. Two spellings of the same community is the failure mode.
+- **Reject placeholder names.** `"Other"`, `"None"`, `"N/A"`,
+  `"Not in a Development"` and similar appear in the MLS where there's no real
+  community name. They group unrelated properties, so the builders exclude them.
+  A subdivision created with one of these names is a bucket of strangers.
+- **Set `hasManualData: true`** so later automated passes know a human authored
+  it and don't clobber it.
+- **Confirm the write.** Return what was stored and whether it was a create or
+  an update. "Done" is not a result.
+- **Never let the AI invent geography.** County, region and coordinates should
+  come from the city record or a geocode, not from the model's memory.
+- **A new record is empty until the builders run.** `cmaStats`, `rentStats` and
+  `cashflowProfile` appear on the next cron pass, not immediately. Say so, or
+  the next question about it returns nothing and looks broken.
 
-**6. Say the awkward thing in the data.** When a figure is weak, the block says
-so in `quality.notes` / `verdict.notes`, in language a user can read. Real
-examples now shipping: *"seasonal rates come from ZIP 92211, not the
-subdivision itself — too few tiered lease comps locally"* and *"the seasonal
-rate rests on asking prices only; no closed seasonal lease in this area
-corroborates it."* The model should surface these, not hide them.
+---
 
-**7. New layers are additive.** A new builder writes a new block; it does not
-edit another builder's output. That keeps blast radius at one field and lets two
-layers be compared instead of one overwriting the other.
+## The rules, plainly
 
-**8. Schedule it or it rots.** An unscheduled builder is a one-off snapshot that
-silently drifts from the data beneath it. This has bitten us twice: the seasonal
-layers went stale before P4.6 scheduled them, and `cashflowProfile` — the single
-document the MCP tools serve — was hand-run only until P4.7. Add a stage to a
-dependency chain and it must be chained in order with `&&` so nothing reads a
-half-built input.
+These eight apply across all four shapes. Each one already cost us a real bug.
 
-## 4 · Lifecycle of a new tool
+**1. The script does the math, never the AI.**
+If answering needs arithmetic, a scheduled job here does it and stores the
+result. One exception: re-running cash flow for a *user-supplied* down payment
+is fine, because the rent and monthly costs are already stored and the rest is
+dividing a loan. Guessing a rent is the expensive part, and it's precomputed.
 
-1. **Name the question** in a user's words. "Does this cash-flow as a rental?"
-   Not "expose cashflowStats."
-2. **Find the gap.** What does answering it require that is not already stored?
-   Check `docs/tools/` first — often the data exists and only the tool is
-   missing.
-3. **Write the builder** in `src/scripts/cma/`. Its module docstring is the
-   spec: inputs, output shape, fallback order, known limitations, usage. Support
-   `--dry-run`, a single-target flag (`--slug` / `--zip` / `--city`), and
-   `--all`.
-4. **Be honest in the output.** Confidence tiers, sample sizes, `source` fields
-   recording which fallback fired, and notes for anything a user would want
-   flagged.
-5. **Verify against a hand calculation** on a known case before trusting it.
-   Then re-run and diff against the previous output to confirm you changed only
-   what you meant to.
-6. **Schedule it** in `crontab.vps`, in dependency order, and install it live.
-7. **Document it** in `docs/tools/` with the shape, the lookup key, the real
-   coverage count, and the reading rules.
-8. **Then** the frontend builds the MCP tool against that doc.
+**2. "We don't know" is a real answer. Never let a blank become a number.**
+No MLS feed carries nightly short-term-rental rates, so we store
+`status: "unclear"` plus what to go verify (HOA minimum lease term, city STR
+ordinance). Leave it empty and the AI invents a nightly rate for an investor.
+And "unclear" is not "no" — saying a property *doesn't* cash-flow when we simply
+don't know is a different and wrong answer.
 
-## 5 · What makes a good MCP tool surface
+**3. Store how many records a number came from.**
+"$6,229/month" from **2 listings** and "$5,800/month" from **5 closed leases**
+look identical on screen and are not the same quality of information. Every
+figure carries its sample size and a confidence of good / fair / insufficient.
+
+**4. A peak-season rate is not a monthly income figure.**
+In ZIP 92211 seasonal rentals get **$10,000/month — for four months**. Across
+the year that's about **$5,200**. Put the $10,000 into a mortgage calculation
+and the property looks great; it isn't. That's a 2x error that reads as
+completely plausible, so peak rates and annual figures are separate fields and
+the docs mark which one is safe for math.
+
+**5. When two sources disagree, keep both. Never average them.**
+Landlords *ask* $6,000 for peak season; tenants actually *paid* $10,000. Both are
+true — they answer different questions. Averaging to $8,000 describes nothing
+real and hides the useful fact that asking prices understate this market by 67%.
+
+**6. Write the warnings into the data, in plain sentences.**
+So the AI repeats ours instead of inventing its own. Real stored example:
+*"seasonal rates come from ZIP 92211, not the subdivision itself — too few lease
+comps locally."* A `confidence: "fair"` code alone leaves the AI guessing what
+the problem was.
+
+**7. New analysis adds a new field; it never overwrites an old one.**
+When achieved seasonal rates arrived, they went into a new `closedSeasonal`
+field and left `seasonal` untouched. Overwriting would have destroyed the
+comparison irreversibly, and could break a working tool.
+
+**8. If it isn't on the cron, it's already rotting.**
+Live example: `cities.subdivisionCount` says 90 for Palm Desert, which is
+correct — and it was last written **2025-12-04**. Nothing refreshes it. It's
+right by luck. This has bitten us twice: the seasonal layers were hand-run until
+P4.6, and `cashflowProfile` until P4.7. Schedule every script, **in dependency
+order**, chained with `&&` so a failed stage stops the ones that read its
+output.
+
+---
+
+## Checklist for a new tool
+
+1. **Write the question in a user's words.** "Does this cash-flow?" — not
+   "expose cashflowStats."
+2. **Pick the shape** from the table above. This decides whether you need a
+   script here at all.
+3. **Check `docs/tools/` first.** The data often already exists and only the
+   tool is missing — there are five such gaps listed there right now.
+4. **If it needs a script:** build it in `src/scripts/cma/`, with a module
+   docstring that states inputs, output shape, fallback order and known limits.
+   Support `--dry-run`, a single-target flag (`--slug` / `--zip` / `--city`),
+   and `--all`.
+5. **If it's a query or a sort:** confirm the field is populated, confirm the
+   index exists, and add sanity guards against junk at the extremes.
+6. **Verify against a hand calculation** on a case you know. Then re-run and
+   diff to confirm you changed only what you meant to.
+7. **Schedule it** in `crontab.vps`, in order, and install it live.
+8. **Document it** in `docs/tools/` — shape, lookup key, real coverage count,
+   reading rules.
+9. **Then** the frontend builds the MCP tool against that doc.
+
+## What makes a good MCP tool surface
 
 - **One question, one tool.** `get_subdivision_cashflow(slug)` beats a generic
-  `query_profile(collection, field)`. The model should not have to know the
-  schema.
-- **Return the whole block.** It is a few KB and it carries the caveats. Do not
-  cherry-pick fields and strip the provenance — that is how a 2-comp number gets
-  quoted as fact.
-- **Pass through the notes.** `verdict.notes` and `quality.confidence` exist for
-  the model to repeat.
-- **Never return a bare verdict.** "Does not cash-flow" with no break-even
-  figure, no strategy breakdown, and no sample size is a dead end for the user.
-  The block already contains the useful version; send it.
-- **Describe the tool so the model reaches for it instead of reasoning.** The
-  tool description should say *"returns precomputed cash-flow analysis — do not
-  calculate this yourself"* in as many words.
+  `query(collection, field)`. The AI shouldn't need to know the schema.
+- **Return the whole precomputed block** for shape 1 — it's a few KB and the
+  caveats are inside it. Stripping them is how a 2-comp number gets quoted as
+  fact.
+- **Return as little as possible** for shapes 2 and 3. Opposite instinct, same
+  goal: give the AI exactly what the question needs.
+- **Pass the notes through.** `verdict.notes` and `quality.confidence` exist for
+  the AI to repeat.
+- **Never return a bare verdict.** "Does not cash-flow", with no break-even and
+  no sample size, is a dead end for the user.
+- **Say so in the tool description.** Spell out *"returns precomputed analysis —
+  do not calculate this yourself."* That sentence is what stops the AI
+  reasoning when it could be reading.
 
-## 6 · Reading guide
+## Where to look next
 
-`docs/tools/README.md` indexes every precomputed block: producer script, lookup
-key, coverage, refresh cadence, and reading rules. Start there.
-
-Deep background on the analytics themselves lives in `docs/cma/`:
-`RENTAL_CASHFLOW.md` (the rent + cash-flow stack), `SUBDIVISION_AND_CITY_CMA.md`
-and `LISTING_CMA.md` (sale comps), and `PDCC_CASHFLOW_SHOWCASE.md` (a complete
-worked answer, useful as a target for what a tool should be able to produce).
+- **`docs/tools/`** — the data contract for every precomputed block: producer,
+  lookup key, exact shape, measured coverage, refresh cadence, reading rules.
+  Start at `docs/tools/README.md`.
+- **`docs/cma/`** — how the analytics actually work, plus
+  `PDCC_CASHFLOW_SHOWCASE.md`, a complete worked answer that's a good quality
+  bar for what a tool should be able to produce.
+- **`docs/db/cleanup-and-migration.md`** — known data debt, including the unused
+  indexes mentioned above.
