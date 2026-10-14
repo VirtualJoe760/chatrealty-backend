@@ -135,6 +135,25 @@ it). Nobody has achieved-furnished off-peak rates — a furnished off-peak lease
 is rare enough that inferring one would be invention — so the conservative
 blend is the honest one.
 
+### The Tue/Fri 2 AM chain, and why order matters
+
+Five stages, chained with `&&` so none reads a half-built input (~3.5 min total,
+measured 2026-10-14):
+
+    build-rent-rates -> build-pool-premium -> build-cashflow
+      -> build-inventory-profile -> build-cashflow-profile
+
+`build-cashflow` additionally needs the two seasonal layers, which run in the
+separate 1:30 AM job ahead of it.
+
+**Stages 2, 4 and 5 were never scheduled before 2026-10-14.** `cashflowProfile`
+— the single `findOne` the MCP tools serve — was only ever built by hand, so it
+drifted out of agreement with the `cashflowStats` it is supposed to be a median
+of, while the listing-level data under it refreshed twice a week. Exactly the
+staleness the seasonal layers had before P4.6 scheduled them. Add a stage to
+this stack and you must schedule it here in dependency order, or it goes stale
+the same silent way.
+
 ---
 
 Financing defaults (all CLI-overridable, echoed into `cashflowStats.assumptions`): 7.0%/30-yr loan, 1.25% tax (derived from price — no `taxAnnualAmount` in MLS; Mello-Roos not modeled), 0.4% insurance, 5% vacancy, 8% management, 5% maintenance, 3% closing.
