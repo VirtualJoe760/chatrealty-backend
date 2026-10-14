@@ -96,7 +96,8 @@ if not MONGO_URI:
 
 AGENTS = "agents"
 BROKERAGES = "brokerages"
-ROSTER = "mlsagents"
+ROSTER = "mlsagents"          # legacy, desert MLS only, not written by this repo
+ROSTER_SPARK = "agent_roster"  # written by sync-agents-roster.py, all 8 MLSs
 
 SRC_ACTIVE = "unified_listings"
 SRC_ESCROW = "unified_in_escrow"
@@ -928,6 +929,8 @@ def _coverage(doc, base, ident, office, roster_hit, now):
         "officeKnown": bool(office),
         "officeUnknownListings": unknown,
         "rosterMatched": bool(roster_hit),
+        "contactFromRoster": bool(roster_hit and (
+            (ident or {}).get("email") or (ident or {}).get("licenseNumber"))),
         "buySideIdentityOnly": bool(buy_only),
         "confidence": conf,
         "notes": notes,
@@ -935,35 +938,77 @@ def _coverage(doc, base, ident, office, roster_hit, now):
 
 
 def load_roster(db, verbose=False):
-    """mlsagents is a Spark-sourced roster: license, email, photo, bio, phone.
+    """Load the member rosters that supply contact detail.
 
-    4,720 docs, keyed by sparkId — verified 2026-10-14 to be the same value as
-    listAgentKey / listAgentId on the listing collections (267 of 300 sampled
-    sparkIds matched a listing). It only covers the desert MLS, so most agents
-    will not match; that is what coverage.rosterMatched reports.
+    Two sources, in priority order:
+
+    1. `agent_roster` — all eight MLSs, 158,667 members, written by
+       sync-agents-roster.py from Spark /v1/accounts. Joined on
+       `agentRef` == this collection's `_id`, i.e.
+       "<mlsSource>:<lower(ShortId)>", because ShortId is the same per-MLS
+       short code that listings carry in listAgentMlsId.
+    2. `mlsagents` — the legacy 4,720-doc desert-only roster, keyed by
+       `sparkId` == listAgentKey. Kept as a fallback and never allowed to
+       overwrite source 1; nothing in this repo writes it, so it is treated
+       as read-only.
+
+    Joining on the Spark 26-digit id alone would be a mistake: it corresponds
+    to `sparkKey`, which is 22-35% populated, and matches nothing at all for
+    CRMLS, HIGH_DESERT, BRIDGE or ITECH.
+
+    Memory: a tight projection over 158,667 docs is roughly 110 MB of Python
+    dicts, which this 3 GB box can hold. If the roster grows much past that,
+    switch compose_pass to batched $in lookups instead of a preloaded map.
     """
-    by_spark, by_namephone = {}, {}
+    FIELDS = {
+        "_id": 0, "agentRef": 1, "sparkId": 1, "shortId": 1, "licenseNumber": 1,
+        "email": 1, "emails": 1, "phone": 1, "phones": 1, "photoUrl": 1,
+        "bio": 1, "name": 1, "active": 1, "officeId": 1, "website": 1,
+        "associations": 1, "designations": 1, "languagesSpoken": 1,
+        "officeCity": 1, "localType": 1, "marketingName": 1, "mlsSource": 1,
+    }
+
+    by_ref, by_spark, by_namephone = {}, {}, {}
+    n_spark = 0
+    try:
+        for r in db[ROSTER_SPARK].find({}, FIELDS):
+            n_spark += 1
+            ref = r.get("agentRef")
+            if ref:
+                by_ref[ref] = r
+            sid = r.get("sparkId")
+            if sid:
+                by_spark.setdefault(str(sid), r)
+            ph, nn = norm_phone(r.get("phone")), norm_name(r.get("name"))
+            if nn and ph:
+                by_namephone.setdefault((nn, ph), r)
+    except OperationFailure as e:
+        log(f"  ! {ROSTER_SPARK} unreadable ({str(e)[:70]}) — falling back",
+            verbose=True)
+
+    n_legacy = 0
     for r in db[ROSTER].find({}, {
             "sparkId": 1, "email": 1, "emailsAll": 1, "licenseNumber": 1,
-            "phone": 1, "photoUrl": 1, "bio": 1, "name": 1, "firstName": 1,
-            "lastName": 1, "officeName": 1, "companyName": 1, "isTeam": 1,
+            "phone": 1, "photoUrl": 1, "bio": 1, "name": 1, "isTeam": 1,
             "active": 1, "accountId": 1, "_id": 0}):
+        n_legacy += 1
         sid = r.get("sparkId")
         if sid:
-            by_spark[str(sid)] = r
-        ph = norm_phone(r.get("phone"))
-        nn = norm_name(r.get("name"))
+            by_spark.setdefault(str(sid), r)
+        ph, nn = norm_phone(r.get("phone")), norm_name(r.get("name"))
         if nn and ph:
-            by_namephone[(nn, ph)] = r
-    log(f"  roster {ROSTER}: {len(by_spark):,} by sparkId, "
-        f"{len(by_namephone):,} by name+phone", verbose=True)
-    return by_spark, by_namephone
+            by_namephone.setdefault((nn, ph), r)
+
+    log(f"  roster: {ROSTER_SPARK} {n_spark:,} ({len(by_ref):,} joinable by ref)"
+        f"  + {ROSTER} {n_legacy:,}  -> {len(by_spark):,} by sparkId,"
+        f" {len(by_namephone):,} by name+phone", verbose=True)
+    return by_ref, by_spark, by_namephone
 
 
 def compose_pass(db, build_id, now, *, verbose=False, dry=False):
     """Second pass: fold the per-source subdocuments into the public shape."""
     t0 = time.time()
-    by_spark, by_namephone = load_roster(db, verbose=verbose)
+    by_ref, by_spark, by_namephone = load_roster(db, verbose=verbose)
 
     cur = db[AGENTS].find({}, batch_size=200)
     ops, n, conf_counter = [], 0, Counter()
@@ -973,12 +1018,18 @@ def compose_pass(db, build_id, now, *, verbose=False, dry=False):
         if ident is None:
             continue
 
-        roster = by_spark.get(str(base.get("sparkKey") or "")) or None
+        # agentRef is the only key that works for every MLS; try it first.
+        roster = by_ref.get(doc["_id"])
+        roster_source = ROSTER_SPARK if roster else None
+        if roster is None:
+            roster = by_spark.get(str(base.get("sparkKey") or "")) or None
+            roster_source = "sparkKey" if roster else None
         if roster is None:
             nn, phones = ident.get("nameNormalized"), ident.get("phones") or []
             for p in phones:
                 roster = by_namephone.get((nn, p))
                 if roster:
+                    roster_source = "name+phone"
                     break
         if roster:
             ident.setdefault("licenseNumber", roster.get("licenseNumber"))
@@ -990,6 +1041,25 @@ def compose_pass(db, build_id, now, *, verbose=False, dry=False):
             ident["rosterSparkId"] = roster.get("sparkId")
             ident["rosterActive"] = roster.get("active")
             ident["accountId"] = roster.get("accountId")
+            ident["rosterSource"] = roster_source
+            for src, dst in (("website", "website"), ("officeCity", "rosterOfficeCity"),
+                             ("marketingName", "rosterMarketingName")):
+                if roster.get(src):
+                    ident[dst] = roster[src]
+            for src, dst in (("associations", "associations"),
+                             ("designations", "designations"),
+                             ("languagesSpoken", "languagesSpoken")):
+                v = roster.get(src)
+                if v:
+                    ident[dst] = v if isinstance(v, list) else [v]
+            if not ident.get("emailsAll") and roster.get("emails"):
+                ident["emailsAll"] = roster["emails"]
+            if roster.get("phones"):
+                merged = list(dict.fromkeys(
+                    (ident.get("phones") or [])
+                    + [q for q in (norm_phone(x) for x in roster["phones"]) if q]))
+                ident["phones"] = merged[:8]
+                ident["phone"] = ident.get("phone") or (merged[0] if merged else None)
             if not ident.get("phone") and norm_phone(roster.get("phone")):
                 ident["phone"] = norm_phone(roster.get("phone"))
             if roster.get("isTeam"):
@@ -1453,6 +1523,18 @@ def main():
           f"{'   [SMOKE cap=' + str(limit) + ']' if limit else ''}"
           f"{'   [DRY RUN]' if args.dry_run else ''}")
     print(f"{'='*74}\n")
+
+    # compose_pass reads the per-source staging subdocuments, and strip_scratch
+    # removes those at the end of every build. So skipping BOTH source stages
+    # leaves it nothing to compose and it would quietly rewrite nothing at all
+    # — including after a fresh roster sync, which is exactly when someone
+    # would reach for these flags. Refuse rather than no-op.
+    if args.skip_live and args.skip_closed and not args.indexes_only:
+        raise SystemExit(
+            "--skip-live together with --skip-closed leaves compose_pass no "
+            "staging data to read (the previous build stripped it), so nothing "
+            "would be written. Run a full --all instead; to pick up a new "
+            "agent_roster, a full rebuild is what re-joins contact detail.")
 
     if args.indexes_only:
         ensure_indexes(db, verbose=args.verbose)

@@ -118,7 +118,15 @@
 # production moves slowly and fidelity beats cadence. A day-old deal count is
 # not a product problem; a half-built agents collection is.
 #
-# NOT chained to anything with && — it reads the listing collections but writes
-# only its own two collections, so it cannot corrupt another job's input and
-# does not need to wait on one.
-0 3 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/agents/build-agents.py --all >> local-logs/build-agents-cron.log 2>&1
+# Two stages, chained with && so the builder never reads a half-synced roster:
+#   1 sync-agents-roster  Spark /v1/accounts -> agent_roster (158,667 members
+#                         across all 8 MLSs; supplies licence, email, phone,
+#                         photo). Must run FIRST — build-agents joins it for
+#                         every agent's contact detail.
+#   2 build-agents        agents + brokerages
+#
+# Not chained to anything outside this pair: it reads the listing collections
+# but writes only its own three collections, so it cannot corrupt another job's
+# input and does not need to wait on one. The pair must still finish before
+# build_search_index.py at 4 AM, which it does with roughly 25 minutes spare.
+0 3 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/agents/sync-agents-roster.py --all >> local-logs/agents-roster-cron.log 2>&1 && .venv/bin/python3 src/scripts/agents/build-agents.py --all >> local-logs/build-agents-cron.log 2>&1

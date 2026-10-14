@@ -63,6 +63,7 @@ CARD = {
     "slug": 1, "agentMlsId": 1, "mlsSource": 1,
     "identity.name": 1, "identity.isTeam": 1, "identity.isSentinel": 1,
     "identity.phone": 1, "identity.personId": 1,
+    "identity.email": 1, "identity.licenseNumber": 1, "identity.photoUrl": 1,
     "brokerage.name": 1, "brokerage.slug": 1,
     "office.name": 1,
     "location.primaryCity": 1, "location.marketLabel": 1,
@@ -184,6 +185,21 @@ def _resolve_agent(ref: str) -> tuple[dict | None, list[dict]]:
     if hits:
         return None, hits
 
+    # an email address or a licence number
+    if "@" in ref:
+        hits = list(AGENTS.find(
+            {"identity.email": re.compile(f"^{re.escape(ref)}$", re.I)}, CARD).limit(10))
+        if len(hits) == 1:
+            return AGENTS.find_one({"_id": hits[0]["_id"]}), []
+        if hits:
+            return None, hits
+    if re.fullmatch(r"\d{6,10}", ref):
+        hits = list(AGENTS.find({"identity.licenseNumber": ref}, CARD).limit(10))
+        if len(hits) == 1:
+            return AGENTS.find_one({"_id": hits[0]["_id"]}), []
+        if hits:
+            return None, hits
+
     # a name
     n = _norm(ref)
     hits = list(AGENTS.find({"identity.searchNames": n}, CARD)
@@ -280,6 +296,9 @@ def search_agents(
     county: str | None = None,
     brokerage: str | None = None,
     mls_source: str | None = None,
+    email: str | None = None,
+    license_number: str | None = None,
+    has_email: bool | None = None,
     status: Literal["active", "recent", "dormant", "any"] = "any",
     has_active_listings: bool | None = None,
     min_closed_deals: int | None = None,
@@ -310,6 +329,14 @@ def search_agents(
         ]}]
     if mls_source:
         q["mlsSource"] = mls_source.strip().upper()
+    if email:
+        q["identity.email"] = re.compile(f"^{re.escape(email.strip())}$", re.I)
+    if license_number:
+        q["identity.licenseNumber"] = re.compile(
+            f"^{re.escape(license_number.strip())}$", re.I)
+    if has_email is not None:
+        q["identity.email"] = ({"$nin": [None, ""]} if has_email
+                               else {"$in": [None, ""]})
     if status != "any":
         q["activity.status"] = status
     if has_active_listings is not None:
@@ -333,6 +360,8 @@ def search_agents(
                "name": name, "city": city, "postalCode": postal_code,
                "county": county, "brokerage": brokerage,
                "mlsSource": mls_source, "status": status,
+               "email": email, "licenseNumber": license_number,
+               "hasEmail": has_email,
                "minClosedDeals": min_closed_deals,
                "minCityDeals": min_city_deals,
                "includePlaceholders": include_placeholders}.items() if v},
@@ -635,6 +664,9 @@ def agent_database_stats() -> dict:
         "withBrokerage": c({"brokerage.slug": {"$exists": True}}),
         "withLicenceNumber": c({"identity.licenseNumber": {"$nin": [None, ""]}}),
         "withEmail": c({"identity.email": {"$nin": [None, ""]}}),
+        "withPhone": c({"identity.phone": {"$nin": [None, ""]}}),
+        "withPhoto": c({"identity.photoUrl": {"$nin": [None, ""]}}),
+        "contactFromRoster": c({"coverage.contactFromRoster": True}),
         "multiMlsPeople": c({"identity.personId": {"$exists": True}}),
         "mlsPlaceholderRecords": c({"identity.isSentinel": True}),
         **_freshness(),
@@ -650,8 +682,15 @@ def agent_database_stats() -> dict:
             "Closed production is limited to the window, and the database "
             "itself TTL-deletes closed listings after 5 years, so older "
             "career history cannot be recovered from this data.",
-            "Email, licence number and photo come from the mlsagents roster, "
-            "which covers the desert MLS only (4,720 agents).",
+            "Email, licence number and phone come from the Spark member "
+            "rosters (agent_roster, all 8 MLSs), not from listings — the feed "
+            "has no agent email at all and populates a phone on only 4-7% of "
+            "listings. Roughly 57% of roster members match an agent record; "
+            "the rest are licensed members who have not transacted in the "
+            "window. coverage.rosterMatched says which.",
+            "Agent photos exist only for GPS and Conejo Simi Moorpark, the "
+            "only two MLSs that syndicate member images. Elsewhere there is "
+            "no photo to be had.",
         ],
     }
 
