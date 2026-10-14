@@ -105,6 +105,39 @@ seasonal block falls back to its dominant ZIP, **92211**, and says so in
 never used as if it were collected twelve months a year — that would be the
 single easiest way to manufacture a fake cash-flowing property.
 
+### Update 2026-10-14 — what five years of CLOSED leases say
+
+`build-closed-seasonal-rates.py` (P4.6) now reads achieved rents from closed
+leases, independently of the asking-price layer above. Two results bear
+directly on this report.
+
+**PDCC itself shows no seasonal operation at all.** 73 closed leases in the
+community over the 60-month window, and **zero** priced at a seasonal level
+(15 were furnished but let at ordinary annual rents). PDCC reads as an
+annual-lease community in the transaction record. The 4bd seasonal headline
+below was already flagged as resting on 2 active comps; it now also has no
+corroboration from five years of closings here. Treat it as a ZIP-level
+possibility, not a PDCC-level fact.
+
+**At ZIP level the achieved rates run well above asking.** For 92211:
+
+| | source | n | rate |
+|---|---|---|---|
+| Active tiered listings (asking) | `seasonal` | 22 | $6,000 peak |
+| Closed leases (achieved) | `closedSeasonal` | 69 | **$10,000 peak**, 96% furnished-confirmed |
+
+Achieved-vs-asking explains part of that, selection explains the rest: the
+closed cohort is defined as closes at or above 2x the local (ZIP, beds)
+median, so it cannot contain a cheaper seasonal lease. Read it as a peak rate.
+Per bed in 92211: 2bd $5,900 (n=9), 3bd $10,000 (n=55), 4bd $10,000 (n=5) —
+the 4bd cell is still thin, but it is 5 achieved closings rather than 2
+asking prices, and the blended annualized figure for the ZIP is $5,200/mo
+against the $4,392 used in the economics below.
+
+The economics in this report have **not** been recomputed against the closed
+layer — wiring `closedSeasonal` into `build-cashflow-profile.py` is tracked
+separately as P4.7, because it moves investor-facing numbers.
+
 ### Private-pool premium — unavailable here, honestly
 `insufficient`. No bedroom+subtype cell had enough private-pool *and* no-pool
 leases to isolate a premium. This is expected in country-club areas, where
@@ -226,9 +259,13 @@ maximum loan → 72.03% break-even. Exact against the stored value.
 ## Caveats to carry forward
 
 1. **4bd seasonal rests on 2 lease comps.** The most attractive number here is
-   also the thinnest. Verify before acting.
+   also the thinnest. Verify before acting. *(2026-10-14: five years of closed
+   leases in PDCC contain zero seasonal-rate closings, so this number gets no
+   corroboration from the transaction record either.)*
 2. **Seasonal is ZIP-level (92211), not PDCC-level.** Directionally sound, but it
-   does not capture PDCC-specific positioning.
+   does not capture PDCC-specific positioning. *(2026-10-14: the closed-lease
+   layer puts the same ZIP at $10,000 peak achieved against $6,000 median
+   asking — the figures below are the conservative side of that range.)*
 3. **No private-pool premium for this area.** Community pools dominate, so a
    private pool's rent lift cannot be isolated — it is likely real but unmeasured,
    and would improve the 35.7% of inventory that has one.

@@ -55,6 +55,19 @@
 # Skipped on Sundays so the weekly listing-CMA backfill below has Atlas to itself.
 30 9 * * 1-6 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-rate-profiles.py --all --workers 4 >> local-logs/rate-profiles-cron.log 2>&1
 
+# ── Seasonal rates — Tue & Fri 1:30 AM (chained, ~2 min) ────────────────────
+# Two independent seasonal sources, run in dependency order:
+#   1. build-seasonal-rates.py        — ACTIVE tiered rateProfiles. Supplies the
+#                                       peak-MONTH structure parsed from remarks.
+#   2. build-closed-seasonal-rates.py — CLOSED leases (achieved rates). Reads the
+#                                       peakMonths the first one just wrote.
+# Neither was scheduled before 2026-10-14; both had only ever been run by hand,
+# so the seasonal blocks were a one-off snapshot going stale. Twice weekly for
+# the same reason as rent-rates: rents move slowly and fidelity beats cadence.
+# Starts at 1:30 so both finish before the 2 AM rent-rates chain, which writes
+# different fields on the same rent_rates docs.
+30 1 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-seasonal-rates.py --all >> local-logs/seasonal-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-closed-seasonal-rates.py --all >> local-logs/closed-seasonal-rates-cron.log 2>&1
+
 # ── Rent Rates + Cash-Flow — Tue & Fri 2 AM (chained, ~2 min) ────────────────
 # MEASURED 2026-10-13: layer 1 = 0.7 min, layer 2 = 1.4 min. The old ~1.5-2 hr
 # estimate was wrong by two orders of magnitude.
