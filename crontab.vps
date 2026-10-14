@@ -29,22 +29,24 @@
 # ── Subdivision CMA — daily 8 AM (~55 min) ───────────────────────────────────
 0 8 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-subdivision-cma.py --all >> local-logs/subdivision-cma-cron.log 2>&1
 
-# ── Photo cache — daily 9 AM — SUSPENDED 2026-10-13 ──────────────────────────
-# Script and db.photos are BOTH retained; only the schedule is off. It had been
-# crash-looping nightly and writing nothing since 2026-08-11. Three stacked bugs:
-#   1. socketTimeoutMS=20000 killed the full-cursor read (FIXED in the script).
-#   2. It upserts on {listingId} but db.photos has a UNIQUE index on photoId and
-#      holds ~1.06M docs for ~86k listings — i.e. one doc PER PHOTO, written that
-#      way by the legacy PC cache_photos.py, not one doc per listing as this
-#      script's docstring assumes. Every insert collides: E11000 on photoId.
-#   3. Consequently db.photos is ~2 months stale and missing every listing added
-#      since August.
-# None of this affects the live site, which serves photos from
-# unified_listings.media[] (fetch-photos.py, 09:30) — verified against a listing
-# with no db.photos doc that still returns all 75 of its photos. So this is a
-# retire-or-redesign decision, not an outage: either drop db.photos, or rewrite
-# the writer to the one-doc-per-photo schema the collection actually uses.
-#0 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/cache-photos.py >> /var/log/photo-cache.log 2>&1
+# ── Photo cache — RETIRED 2026-10-14 ─────────────────────────────────────────
+# Removed, not suspended. db.photos was dropped on 2026-10-14 and
+# cache-photos.py now lives in archive/mls/unified/.
+#
+# The collection was a legacy primary-photo cache (1,056,867 docs for ~86k
+# listings — one doc PER PHOTO) that had written nothing since 2026-08-11 and
+# that no code read: the site serves photos from unified_listings.media[],
+# filled by fetch-photos.py at 09:30 below.
+#
+# Nothing was lost. Before the drop, media[] was repaired from the Spark feed
+# (fetch-photos.py --missing-media: 651 live/in-escrow listings, 12,335 photos)
+# and everything db.photos still held uniquely was migrated into media[]
+# (migrate-photos-to-media.py: 16,502 listings, 23,092 photos — nearly all of
+# them off-market, where Spark no longer serves photos at all). Verified zero
+# listings left holding photos only in db.photos before dropping.
+#
+# Full export kept at /root/backups/photos-20261013.jsonl.gz (81 MB, sha256 in
+# the sibling .manifest.json) — see archive/README.md to restore.
 
 # ── Fetch photos (delta) — daily 9:30 AM ─────────────────────────────────────
 30 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/fetch-photos.py --all --delta >> /var/log/mls-fetch-photos.log 2>&1

@@ -34,7 +34,6 @@ unified/
 ├── run-pipeline.py              ← ENTRY POINT. Orchestrator: fetch → flatten → seed
 ├── update-status.py             ← Batched full-data refresher + cross-collection router
 ├── fetch-photos.py              ← Per-listing /photos → media[] inline (all 3 on-market collections)
-├── cache-photos.py              ← Per-listing primary photo → db.photos (list/map views)
 ├── verify-db.py                 ← Read-only sanity check (counts, statuses, indexes)
 └── closed/
     ├── README.md
@@ -69,7 +68,6 @@ All scripts run under `/root/jpsrealtor/.venv/bin/python3`. Source of truth: `/r
 | **03:00 Sun** | `run-pipeline.py --all` | Weekly full sync (no time filter) — catches drift. |
 | **07:00 daily** | `update-status.py` | Batched (25/req) full-data refresh of every on-market doc. Routes status transitions to correct collection. Sweeps stuck Closed docs. ~90 min for ~125k docs. |
 | **08:00 daily** | `cma/build-subdivision-cma.py --all` | Rebuild `cmaStats` on every subdivision. ~55 min. |
-| ~~09:00 daily~~ | `cache-photos.py` | **SUSPENDED 2026-10-13.** Script and `db.photos` both retained; only the schedule is off. It upserts on `{listingId}` but `db.photos` has a UNIQUE index on `photoId` and is one-doc-per-photo (~1.06M docs / ~86k listings) from the legacy PC writer, so every insert collided with E11000 and nothing had been written since 2026-08-11. The live site is unaffected — it serves photos from `unified_listings.media[]` via `fetch-photos.py`. Retire-or-redesign decision pending. |
 | **09:30 daily** | `fetch-photos.py --all --delta` | Media[] inline delta sync on all 3 on-market collections. ~6 hours for full catch-up. |
 | **10:00 daily** | `backend/historical_closed_sync.py` | 30-day rolling closings into `unified_closed_listings`. |
 
@@ -145,12 +143,40 @@ Per-listing `GET /v1/listings/{key}/photos` → `media[]` inline on the doc. Spa
 python3 fetch-photos.py --mls GPS --limit 10    # sanity
 python3 fetch-photos.py --all                    # full backfill (~24h)
 python3 fetch-photos.py --all --delta            # daily cron
+python3 fetch-photos.py --all --missing-media \
+        --collection unified_listings            # repair: only docs with no media[]
 ```
+
+`--missing-media` exists because `photoCachedAt` is stamped on failures and
+empty responses too, which makes a doc that got no photos invisible to both
+the default and `--delta` modes forever. It selects on the gap itself
+(`media.0` absent) and ignores `photoCachedAt`. `--collection` scopes the run:
+on 2026-10-14 the gap was 1,190 live + 126 in-escrow against 27,754
+off-market, and at ~2 req/sec the off-market set is a ~4-hour run.
 
 Spark returns photos for roughly ~30% of listings — the rest have permission-denied or empty responses (a Spark replication limitation, not a script bug). All three outcomes mark `photoCachedAt` so failures don't starve out successes on repeat runs.
 
-### `cache-photos.py`
-Caches **one primary photo per listing** into the separate `db.photos` collection keyed by `listingId`. Used by list/map/card views for O(1) primary-photo lookup without loading the full `media[]`. Runs across all three on-market collections. Uses `local-logs/photo-logs/skip_index.json` for permanent-403 resumability.
+### `cache-photos.py` — RETIRED 2026-10-14
+Moved to `archive/mls/unified/cache-photos.py`; the `db.photos` collection it
+wrote was dropped the same day. Photos come from `unified_listings.media[]`
+(`fetch-photos.py`) and nothing read `db.photos`. Everything it held uniquely
+was migrated into `media[]` first, and a full export is kept at
+`/root/backups/photos-20261013.jsonl.gz`. See `archive/README.md`.
+
+### `migrate-photos-to-media.py`
+Fallback half of the `db.photos` retirement: copies legacy photo docs into
+`media[]` for listings that still have none. Always run
+`fetch-photos.py --missing-media` FIRST — `db.photos` was a primary-photo
+cache holding 1–7 photos per listing where the feed carries 9–67, so
+migrating first would pin a listing to one thumbnail. Never overwrites;
+elements carry `mediaSource: "db.photos"` and no `photoCachedAt` is stamped,
+so the listing stays eligible for a future feed fetch. `--dry-run` / `--apply`.
+
+### `export-photos-collection.py`
+One-shot: dumps a collection to gzipped JSONL (BSON extended JSON) with a
+sha256 manifest. Written for the pre-drop `db.photos` export; reusable for any
+collection this VPS needs a copy of before destructive work, since there are
+no database backups here.
 
 ### `verify-db.py`
 Read-only. Prints counts by MLS / status / propertyType, index list, and a sample document. Safe to run any time.

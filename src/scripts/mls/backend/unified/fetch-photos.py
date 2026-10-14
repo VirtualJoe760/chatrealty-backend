@@ -20,6 +20,10 @@ Three run modes:
     is newer than their `photoCachedAt`. This is the daily cron mode.
   - `--force`: ignore `photoCachedAt` entirely and re-fetch every matched
     doc.
+  - `--missing-media`: repair mode. Select docs that have no `media[0]`,
+    whatever their `photoCachedAt` says. Use this after a gap is found —
+    a doc can carry a `photoCachedAt` from a run that failed or returned
+    no photos, which makes both default and `--delta` skip it forever.
 
 Rate-limit tuning is deliberately conservative (1 worker, 0.5 s between
 requests, exponential backoff on 429). The first backfill run with 3
@@ -38,6 +42,9 @@ Usage:
 
     # Re-cache a specific MLS ignoring existing photoCachedAt
     python3 src/scripts/mls/backend/unified/fetch-photos.py --mls CRMLS --force
+
+    # Repair: fill media[] only where it is missing entirely
+    python3 src/scripts/mls/backend/unified/fetch-photos.py --all --missing-media
 """
 
 import os
@@ -158,6 +165,19 @@ def fetch_photos_for_listing(listing_key: str) -> tuple[list[dict] | None, str]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+LIFECYCLE_COLLECTIONS = ("unified_listings", "unified_in_escrow", "unified_off_market")
+
+
+def run_mode(args) -> str:
+    if getattr(args, "missing_media", False):
+        return "missing-media"
+    if args.force:
+        return "force"
+    if args.delta:
+        return "delta"
+    return "fresh"
+
+
 def build_query(args) -> dict:
     q: dict = {}
     if args.mls:
@@ -165,6 +185,15 @@ def build_query(args) -> dict:
     elif not args.all:
         # Neither --mls nor --all: default to --all-like behavior but warn.
         pass
+
+    if getattr(args, "missing_media", False):
+        # Repair mode. Target the gap itself — docs with an absent or empty
+        # media[] — and ignore photoCachedAt, which is exactly what makes
+        # these docs invisible to the other two modes: a failed or
+        # no-photos run still stamps photoCachedAt, so the doc is never
+        # retried even though it has no photos.
+        q["media.0"] = {"$exists": False}
+        return q
 
     if args.force:
         return q
@@ -193,6 +222,10 @@ def main():
                         help="Re-fetch docs where modificationTimestamp > photoCachedAt (daily cron mode).")
     parser.add_argument("--force", action="store_true",
                         help="Ignore photoCachedAt — re-fetch every matched doc.")
+    parser.add_argument("--missing-media", action="store_true",
+                        help="Repair mode: only docs with no media[0], regardless of photoCachedAt.")
+    parser.add_argument("--collection", choices=LIFECYCLE_COLLECTIONS, action="append",
+                        help="Restrict to one lifecycle collection (repeatable). Default: all three.")
     parser.add_argument("--limit", type=int, default=0, help="Cap docs processed (0 = no cap).")
     parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP,
                         help=f"Seconds between requests (default {DEFAULT_SLEEP}).")
@@ -209,7 +242,13 @@ def main():
     # Iterate all three on-market lifecycle collections. Closed listings aren't
     # included — Spark strips photos after close so we preserve whatever media[]
     # was captured while the listing was alive.
-    source_collections = ("unified_listings", "unified_in_escrow", "unified_off_market")
+    #
+    # --collection narrows this. It matters for --missing-media: the gap is
+    # 1,190 docs in unified_listings and 126 in unified_in_escrow, against
+    # 27,754 in unified_off_market. At ~2 req/sec the off-market set is a
+    # ~4-hour run for listings nobody is looking at, so repair the live ones
+    # first and schedule off-market separately.
+    source_collections = tuple(args.collection) if args.collection else LIFECYCLE_COLLECTIONS
 
     query = build_query(args)
     projection = {"listingKey": 1, "mlsSource": 1, "modificationTimestamp": 1}
@@ -233,7 +272,7 @@ def main():
 
     print(f"[INFO] {total:,} listings to fetch photos for")
     print(f"[INFO] workers: 1")
-    print(f"[INFO] mode: {'delta' if args.delta else ('force' if args.force else 'fresh')}")
+    print(f"[INFO] mode: {run_mode(args)}")
     if args.mls:
         print(f"[INFO] mls: {args.mls}")
     # Breakdown by source
@@ -298,7 +337,7 @@ def main():
 
     summary = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "mode": "delta" if args.delta else ("force" if args.force else "fresh"),
+        "mode": run_mode(args),
         "mls": args.mls,
         "all": args.all,
         "limit": args.limit,
