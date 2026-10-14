@@ -33,7 +33,8 @@ rates. Nothing in PDCC cash-flows at 20% down under any strategy.
 The two seasonal rows differ by rent source only; the achieved row is the
 better-evidenced of the two (69 closed leases, 96% furnished-confirmed, against
 22 asking comps). See *Update 2026-10-14 — what five years of CLOSED leases
-say* below; it moves the strongest bedroom cell from 4bd to 3bd.
+say* below; it narrows the 4bd advantage to 6 points and, on the single best
+listing, moves the strongest cell to 3bd.
 
 **Short-term is unclear, not negative.** No MLS source carries nightly rates, so
 a number here would be invention. To price it you would need to verify the HOA
@@ -43,9 +44,12 @@ rather than private, both of which bear on short-term viability.
 
 ### The strongest cell on asking rates: 4-bedroom, seasonal
 
-> **Superseded in part.** This section reports the *asking* layer. The closed-lease
-> layer below puts the achieved 4bd rate below these asking figures and moves the
-> break-even from 28.7% to 35.8%, making 3bd the better-evidenced cell. Read both.
+> **Superseded in part.** This section reports the *asking* layer, and its 4bd
+> rate rests on 2 comps. The closed-lease layer below puts the achieved 4bd rate
+> *below* these asking figures: median break-even 28.7% → 35.8%, best listing
+> 23.1% → 29.8%. 4bd stays the lowest median break-even of the three cells, but
+> only by 6 points instead of 24, and 3bd overtakes it on the best single
+> listing. Read both sections.
 
 
 | | 2bd | 3bd | **4bd** |
@@ -165,25 +169,32 @@ down under any of the three, and the best individual listing is marginally
 *worse* on achieved rates (24.3% vs 23.1%) than on asking. The verdict is
 unchanged: this is an appreciation/lifestyle community, not a cash-flow one.
 
-**And it moves the strongest cell from 4bd to 3bd.** Achieved rents only beat
-asking at 3bd; at 2bd and 4bd they come in lower, and the break-even moves with
-them:
+**And it narrows the 4bd advantage sharply — on one metric, erasing it.**
+Achieved rents only beat asking at 3bd; at 2bd and 4bd they come in lower, and
+both break-even measures move with them:
 
-| beds | n | rent asking → achieved | break-even asking → achieved | cap asking → achieved |
-|---|---|---|---|---|
-| 2bd | 3 | $3,754 → $3,633 | 47.1% → 49.5% | 4.40% → 4.20% |
-| 3bd | 9 | $4,704 → **$5,400** | 53.0% → **42.1%** | 3.91% → **4.81%** |
-| 4bd | 3 | $6,229 → $5,800 | 28.7% → 35.8% | 5.92% → 5.34% |
+| beds | n | rent asking → achieved | median break-even | best listing in cell | cap |
+|---|---|---|---|---|---|
+| 2bd | 3 | $3,754 → $3,633 | 47.1% → 49.5% | 24.5% → 28.1% | 4.40% → 4.20% |
+| 3bd | 9 | $4,704 → **$5,400** | 53.0% → **42.1%** | 36.6% → **24.3%** | 3.91% → **4.81%** |
+| 4bd | 3 | $6,229 → $5,800 | **28.7% → 35.8%** | 23.1% → 29.8% | 5.92% → 5.34% |
 
-The 4bd seasonal headline rested on 2 active asking comps. Five years of ZIP
-closings put the achieved 4bd blend *below* that asking figure and push its
-break-even from 28.7% to 35.8%. Two independent checks — no seasonal closings
-in PDCC at all, and a lower achieved 4bd rate at ZIP level — now point the same
-way, so the 4bd cell should not be quoted as the seasonal opportunity here.
+Read these two columns separately, because they disagree:
 
-On achieved rates the best cell is **3bd**: break-even 42.1% on 9 listings,
-backed by 55 closed 3bd leases in the ZIP, against 2 asking comps behind the
-old 4bd number. It is a worse headline resting on far better evidence.
+* **On the median listing, 4bd is still the strongest cell** on both layers —
+  35.8% achieved against 3bd's 42.1%. But its margin over 3bd collapses from
+  24.3 points to 6.3.
+* **On the single best listing, the strongest cell flips to 3bd** — 24.3%
+  achieved, against 4bd's 29.8%. The most attractive individual property in PDCC
+  is a 3bd once you price it on achieved rates, not a 4bd.
+
+Either way the 4bd headline weakens, and it weakens on evidence rather than
+opinion. It rested on 2 active asking comps; five years of ZIP closings put the
+achieved 4bd blend *below* that asking figure, moving its median break-even
+28.7% → 35.8% and its best listing 23.1% → 29.8%. Two independent checks — no
+seasonal closings in PDCC at all, and a lower achieved 4bd rate at ZIP level —
+now point the same way. 3bd is the cell that improves, and it does so on 55
+closed leases against the 2 asking comps behind the old 4bd number.
 
 `rents.seasonalDivergence` records the peak-to-peak comparison (1.67x here) on
 every profile, so this check no longer requires reading two layers by hand.
