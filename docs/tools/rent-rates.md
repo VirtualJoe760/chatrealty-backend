@@ -196,8 +196,8 @@ unavailable; do not estimate.
 
 ## `rateProfile` — the per-listing input
 
-On active lease listings (`propertyType: "B"`), ~15.8k covered, refreshed
-Mon–Sat 9:30 AM. Extracted from `publicRemarks` by a regex + Groq stack,
+On active lease listings (`propertyType: "B"`) — **15,935 of 15,936**, i.e.
+effectively complete — refreshed Mon–Sat 9:30 AM. Extracted from `publicRemarks` by a regex + Groq stack,
 validated by `audit-rate-tiers.py`.
 
 Mostly an **internal input** to `build-seasonal-rates.py`. A tool could surface

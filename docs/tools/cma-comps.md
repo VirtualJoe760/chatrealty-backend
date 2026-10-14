@@ -9,7 +9,7 @@ analysis with a different internal shape.
 | `subdivisions.cmaStats` | `build-subdivision-cma.py` | `slug` | daily 8 AM | `get_subdivision_cma`, `get_market_stats` |
 | `unified_listings.cmaStats` | `build-listing-cma.py` | `listingKey` | Sun 1 AM | `find_comparables` |
 
-**Coverage:** all 1,426 subdivisions · active listings. Note `cities.cmaStats`
+**Coverage:** all 1,426 subdivisions · 46,768 active listings. Note `cities.cmaStats`
 is **not** populated (0 docs) — city-level sale stats are not built; use
 `inventoryProfile` and `cashflowProfile` for cities.
 

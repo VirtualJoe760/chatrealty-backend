@@ -41,14 +41,13 @@ Every analytics output is a self-describing block on one of those documents.
 | `rentStats.poolPremium` | `subdivisions`, `rent_rates` | `build-pool-premium.py` | 759 subs / 896 ZIPs | [rent-rates.md](rent-rates.md) |
 | `inventoryProfile` | `subdivisions`, `cities` | `build-inventory-profile.py` | 742 subs / 836 cities | [inventory-profile.md](inventory-profile.md) |
 | `cmaStats` | `subdivisions` | `build-subdivision-cma.py` | 1,426 | [cma-comps.md](cma-comps.md) |
-| `cmaStats` | `unified_listings` | `build-listing-cma.py` | active listings | [cma-comps.md](cma-comps.md) |
-| `rateProfile` | `unified_listings` (lease) | `build-rate-profiles.py` | ~15.8k leases † | [rent-rates.md](rent-rates.md) |
+| `cmaStats` | `unified_listings` | `build-listing-cma.py` | 46,768 listings | [cma-comps.md](cma-comps.md) |
+| `rateProfile` | `unified_listings` (lease) | `build-rate-profiles.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
 
-> Coverage counts were measured against production on **2026-10-14**, except
-> those marked † which are the producing script's own reported figure. Counts
-> are not 100% and never will be — thin markets genuinely lack comps.
-> **Always handle the absent case**; the blocks say why they are absent rather
-> than guessing a number. Re-measure before relying on an exact figure.
+> All coverage counts measured against production on **2026-10-14**. Most are
+> not 100% and never will be — thin markets genuinely lack comps. **Always
+> handle the absent case**; the blocks say why they are absent rather than
+> guessing a number. Re-measure before relying on an exact figure.
 
 ## Refresh cadence
 
