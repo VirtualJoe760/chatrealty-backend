@@ -25,11 +25,28 @@ src/scripts/
 |---|---|---|
 | Sale comps | `build-subdivision-cma.py`, `build-listing-cma.py` | `cmaStats` |
 | Rental going rate | `build-rent-rates.py` | `subdivisions.rentStats`, `rent_rates` collection |
+| Seasonal rates (asking) | `build-seasonal-rates.py` | `rentStats.seasonal` |
+| Seasonal rates (achieved) | `build-closed-seasonal-rates.py` | `rentStats.closedSeasonal` |
+| Private-pool rent lift | `build-pool-premium.py` | `rentStats.poolPremium` |
 | Cash-flow scoring | `build-cashflow.py` | `unified_listings.cashflowStats` |
+| Inventory mix | `build-inventory-profile.py` | `inventoryProfile` |
+| **Cash-flow rollup** | `build-cashflow-profile.py` | **`cashflowProfile`** — the one-findOne answer |
+
+## Building AI tools against this data
+
+**If you are writing an MCP tool or a frontend reader, start here:**
+
+- **`docs/strategies/tool-development.md`** — the precompute-then-serve strategy
+  and its non-negotiable rules. The model must never calculate; it looks up a
+  figure a cron job already computed and says where it came from.
+- **`docs/tools/`** — the data contract for every precomputed block: producer,
+  lookup key, exact shape, real coverage counts, refresh cadence, and reading
+  rules. Start at `docs/tools/README.md`.
 
 The rental cash-flow stack powers the chat query *"show me listings in X that
-cash-flow with 20% down."* Frontend/MCP contract: **`docs/cma/RENTAL_CASHFLOW.md`**
-(+ the ready-to-paste handoff in `docs/cma/RENTAL_CASHFLOW_FRONTEND_PROMPT.md`).
+cash-flow with 20% down."* Deeper architecture notes live in
+`docs/cma/RENTAL_CASHFLOW.md`; `docs/cma/RENTAL_CASHFLOW_FRONTEND_PROMPT.md` is
+an earlier single-tool handoff, superseded for new work by `docs/tools/`.
 
 ## Setup
 
@@ -42,5 +59,7 @@ Secrets live in `.env.local` (git-ignored). See `.env.example` for the required 
 
 ## Docs
 
-- `docs/cma/` — CMA + rental architecture and frontend contracts
+- `docs/tools/` — **data contracts for AI/MCP tool authors** (start here)
+- `docs/strategies/` — how we build tools, and why the data is shaped this way
+- `docs/cma/` — CMA + rental architecture, algorithm detail, worked examples
 - `docs/db/` — database state, cleanup, and migration notes
