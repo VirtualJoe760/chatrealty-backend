@@ -15,6 +15,41 @@ is **not** populated (0 docs) — city-level sale stats are not built; use
 
 ---
 
+## How to get it
+
+**Access mode:** read MongoDB. Two different blocks, two different keys — and
+**different internal shapes** despite the shared field name.
+
+```ts
+// A · area rollup — key: subdivisions.slug (unique)
+const area = await db.collection("subdivisions").findOne(
+  { slug },
+  { projection: { cmaStats: 1, name: 1, city: 1, _id: 0 } }
+);
+
+// B · per-listing comps — key: unified_listings.listingKey (unique)
+const listing = await db.collection("unified_listings").findOne(
+  { listingKey },
+  { projection: { cmaStats: 1, unparsedAddress: 1, listPrice: 1, _id: 0 } }
+);
+```
+
+**What to return.** For B, prefer `cmaStats.narrative` (pre-written prose) plus
+`limitations`, `inferences` and `tier` over dumping the full `activeComps` /
+`closedComps` arrays — those are large and the narrative already summarizes
+them. Return the arrays only when the user asks to see the comps.
+
+**Do not use `cities.cmaStats` — it does not exist** (0 documents). For
+city-level work use `inventoryProfile` and `cashflowProfile`.
+
+**If absent:** the listing or subdivision has no comp set. Say so; do not widen
+the search yourself — the builder already tried five fallback levels and
+recorded which one it reached in `tier`.
+
+**Cost:** one indexed `findOne` each.
+
+---
+
 ## `subdivisions.cmaStats` — area rollup
 
 Reads sale listings (Residential only, leases excluded) from both

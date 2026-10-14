@@ -20,10 +20,26 @@ The two things a cash-flow or "what's available" answer needs that
    deeper in `cmaStats.subdivisionProfile`; this surfaces them with explicit
    `withData` denominators.
 
-```js
-db.subdivisions.findOne({ slug: "palm-desert-country-club" }, { inventoryProfile: 1 })
-db.cities.findOne({ slug: "palm-desert" }, { inventoryProfile: 1 })
+## How to get it
+
+**Access mode:** read MongoDB. **Key:** `slug` (unique).
+
+```ts
+const doc = await db.collection("subdivisions").findOne(   // or "cities"
+  { slug },
+  { projection: { inventoryProfile: 1, _id: 0 } }
+);
 ```
+
+**What the tool returns:** `doc.inventoryProfile` whole. It is small.
+
+**If absent:** no active inventory. Fall back to the parent city via
+`geo.city`. Do not report zero homes — report that we have no current listings.
+
+**Cost:** one indexed `findOne`.
+
+> If you already need cash-flow economics, read `cashflowProfile` instead — it
+> embeds these same fields under `.inventory`, so you need only one query.
 
 ## Shape
 

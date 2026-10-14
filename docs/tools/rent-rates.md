@@ -14,10 +14,70 @@ output, so sources can be compared instead of blended.
 **Refreshed:** seasonal layers Tue + Fri 1:30 AM; rent-rates and pool-premium
 Tue + Fri 2 AM. **Backs:** `get_going_rate`; the other three have **no tool yet**.
 
-```js
-db.subdivisions.findOne({ slug: "palm-desert-country-club" }, { rentStats: 1 })
-db.rent_rates.findOne({ postalCode: "92211" })
+## How to get it
+
+**Access mode:** read MongoDB. All four layers live inside **one** `rentStats`
+object (subdivision) or **one** `rent_rates` document (ZIP) — so you fetch them
+together in a single query, never four.
+
+**Keys:** `subdivisions.slug` (unique) · `rent_rates.postalCode` (unique,
+**string** — `"92211"`, not `92211`, or the query silently returns nothing).
+
+```ts
+// subdivision — all four layers in one read
+const sub = await db.collection("subdivisions").findOne(
+  { slug },
+  { projection: { rentStats: 1, dominantPostalCode: 1, _id: 0 } }
+);
+
+// ZIP — the whole doc IS the rent block
+const zip = await db.collection("rent_rates").findOne(
+  { postalCode },                     // string
+  { projection: { _id: 0 } }
+);
 ```
+
+### Implement the fallback — it is the whole point
+
+A subdivision layer is often `insufficient` while the ZIP has data. Fetch the
+subdivision, then the ZIP named by `dominantPostalCode`, and **tell the user
+which one you used**:
+
+```ts
+function pickLayer(sub, zip, layer, validBases) {
+  const s = sub?.rentStats?.[layer];
+  if (s && validBases.includes(s.basis)) return { ...s, source: "subdivision" };
+  const z = zip?.[layer];
+  if (z && validBases.includes(z.basis))
+    return { ...z, source: "zip", zipUsed: zip.postalCode };
+  return { source: "insufficient", basis: "insufficient" };
+}
+
+const seasonal = pickLayer(sub, zip, "seasonal", ["tiered-median"]);
+const achieved = pickLayer(sub, zip, "closedSeasonal",
+                           ["closed-furnished", "closed-tail-inferred"]);
+const pool     = pickLayer(sub, zip, "poolPremium", ["matched-cell-median"]);
+```
+
+**Gate on `basis`, not on presence.** A block exists with
+`basis: "insufficient"` and null rates when the sample was too thin — truthiness
+is not enough.
+
+`poolPremium` inverts the order: **prefer ZIP over subdivision**, because
+subdivision rows include placeholder names like `"Other"` that group unrelated
+properties.
+
+### What the tool returns
+
+Return **both** seasonal layers with their sample sizes, plus the long-term
+`goingRate`. Returning one seasonal layer alone invites exactly the 2x mistake
+the two-layer design exists to prevent. For a ready-made comparison, read
+`cashflowProfile.rents.seasonalDivergence` instead of deriving it.
+
+**If all layers are insufficient:** say there is not enough lease data for the
+area. Never interpolate from a neighboring community.
+
+**Cost:** two indexed `findOne`s (subdivision + its fallback ZIP).
 
 ---
 

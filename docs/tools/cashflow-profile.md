@@ -19,10 +19,34 @@ It **composes only**. Every economic figure is a median over the per-listing
 `cashflowStats` that `build-cashflow.py` already wrote, so a rollup can never
 disagree with the listing detail a user drills into.
 
-```js
-db.subdivisions.findOne({ slug: "palm-desert-country-club" }, { cashflowProfile: 1 })
-db.cities.findOne({ slug: "palm-desert" }, { cashflowProfile: 1 })
+## How to get it
+
+**Access mode:** read MongoDB. Nothing to call — this block is written by cron.
+**Key:** `slug` (unique). Resolve a user's words to a slug first — see
+[how-to-call.md](how-to-call.md#3--lookup-keys-and-how-to-resolve-user-words-into-them).
+
+```ts
+// subdivision
+const doc = await db.collection("subdivisions").findOne(
+  { slug },                                    // e.g. "palm-desert-country-club"
+  { projection: { cashflowProfile: 1, _id: 0 } }
+);
+
+// city — same block, same shape
+const doc = await db.collection("cities").findOne(
+  { slug },                                    // e.g. "palm-desert"
+  { projection: { cashflowProfile: 1, _id: 0 } }
+);
 ```
+
+**What the tool returns:** `doc.cashflowProfile` **whole and unmodified**. It is
+a few KB and the caveats live inside it. Do not cherry-pick fields.
+
+**If absent** (`!doc?.cashflowProfile`): the area has no active inventory with a
+rent signal. Return `{ available: false, reason }` and offer the parent city —
+its slug is derivable from `geo.city`. Never substitute zeros.
+
+**Cost:** one indexed `findOne`. No aggregation, no math, no second round-trip.
 
 ## Shape
 

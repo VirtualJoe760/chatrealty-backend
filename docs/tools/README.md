@@ -9,6 +9,12 @@ shaped this way and walks through the **four shapes of tool** — look up a
 precomputed answer, list the options, rank by a stat, or write a record — each
 with its own rules.
 
+**Then read [how-to-call.md](how-to-call.md).** It is the implementation
+contract: the one access mode (read MongoDB — **no script here is callable on
+demand and there is no HTTP API**), the connection, the four unique lookup keys
+and how to resolve a user's words into them, and a worked end-to-end example.
+Every block doc below has a **How to get it** section with the exact query.
+
 The short version: **the AI must never calculate.** Everything indexed below was
 computed offline by a cron job; the tool does one `findOne` and returns the
 block. Note that not every tool needs precomputing — listing the subdivisions in
@@ -36,6 +42,9 @@ Database: **`admin`** (yes — all app data is in `admin`; migration to
 ## The block index
 
 Every analytics output is a self-describing block on one of those documents.
+
+Each doc's **How to get it** section carries the exact query, the key, what the
+tool should return, and the absent case.
 
 | Block | Lives on | Producer | Coverage | Doc |
 |---|---|---|---:|---|

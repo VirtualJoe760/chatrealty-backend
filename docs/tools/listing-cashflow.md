@@ -16,15 +16,123 @@ math — financing, operating expenses, break-even, and two down-payment
 scenarios. Written so that *"show me listings in Palm Desert that cash-flow with
 20% down"* is a plain indexed Mongo filter+sort, with no math at request time.
 
-```js
-db.unified_listings.find({
-  city: "Palm Desert",
-  "cashflowStats.scenarios.down20.monthlyCashflow": { $gt: 0 }
-}).sort({ "cashflowStats.scenarios.down20.monthlyCashflow": -1 })
+## How to get it
+
+**Access mode:** read MongoDB. **Key:** `listingKey` (unique index
+`listingKey_unique`).
+
+### A · One listing
+
+```ts
+const doc = await db.collection("unified_listings").findOne(
+  { listingKey },
+  { projection: { cashflowStats: 1, listPrice: 1, unparsedAddress: 1,
+                  bedsTotal: 1, livingArea: 1, city: 1, _id: 0 } }
+);
 ```
 
-> Needs the `city_cashflow20` / `zip_cashflow20` indexes — see
-> [README.md](README.md#four-things-that-will-bite-you).
+Returns `doc.cashflowStats` whole, plus the identity fields so the answer can
+name the property. **If absent:** no rent signal covers this listing's area
+(~5,400 listings) — say rent cannot be estimated, never `$0`.
+
+### B · "Which listings here cash-flow?"
+
+A plain indexed filter + sort. **No math at request time.**
+
+```ts
+const strategyBlock = {                     // pick ONE
+  longTerm:       "cashflowStats",            // long-term sits at the top level
+  seasonal:       "cashflowStats.strategies.seasonal",
+  closedSeasonal: "cashflowStats.strategies.closedSeasonal",
+}[strategy ?? "longTerm"];
+const strategyPath = `${strategyBlock}.scenarios.down20`;
+
+const rows = await db.collection("unified_listings")
+  .find(
+    { city,                                 // or { postalCode }
+      propertyType: "A",
+      listPrice: { $gte: 25000 },           // ← junk guards, see below
+      propertySubType: { $nin: ["Co-Ownership", "Own Your Own", "Timeshare"] },
+      [`${strategyPath}.cashflows`]: true },
+    { projection: {
+        listingKey: 1, unparsedAddress: 1, listPrice: 1, bedsTotal: 1,
+        livingArea: 1, slug: 1, _id: 0,
+        [`${strategyPath}.monthlyCashflow`]: 1,
+        [`${strategyPath}.cashOnCashPct`]: 1,
+        // break-even and rent must come from the SAME strategy, not the top
+        // level — the top level is long-term only. See the warning below.
+        [`${strategyBlock}.breakEvenDownPct`]: 1,
+        [`${strategyBlock}.rentEstimate.monthlyRent`]: 1,
+        [`${strategyBlock}.rentEstimate.source`]: 1 } })
+  .sort({ [`${strategyPath}.monthlyCashflow`]: -1 })
+  .limit(limit ?? 10)
+  .toArray();
+```
+
+**Project tightly.** A full listing document is large; returning 10 of them to
+answer this question wastes most of the tool's token budget. The fields above are
+enough to present a result and chain into a detail tool via `listingKey`.
+
+### Both junk guards are mandatory
+
+**`listPrice: { $gte: 25000 }`** — without it the sort surfaces misclassified
+rentals. There is an active "sale" listing at **$795** for 800 sqft.
+`build-cashflow.py` skips those when scoring, but they remain in the collection.
+
+**`propertySubType: { $nin: [...] }`** — fractional-ownership listings price a
+**share**, not the property, while the rent estimate is for the whole home. That
+produces impossible yields that sort straight to the top. Measured 2026-10-14:
+
+| subType | active | scored | showing "cash-flowing" |
+|---|---:|---:|---:|
+| `Co-Ownership` | 29 | 28 | **13** |
+| `Own Your Own` | 16 | 14 | **5** |
+| `Timeshare` | 12 | 3 | **1** |
+
+Real example: *72985 Somera Road* is listed at **$289,000** for a 4bd/3,163 sqft
+home — a co-ownership share. Rent is estimated at $5,600/mo from the 4-bedroom
+ZIP median, giving a **23.3% gross yield** and making it the **#1 cash-flowing
+listing in Palm Desert**. It is not an investment property at that price.
+
+These 19 listings are only ~2% of the 869 that show as cash-flowing long-term,
+but they carry the highest apparent returns, so they dominate the top of any
+sort. **A ranking tool without this filter leads with them.**
+
+> `build-cashflow.py` does not yet exclude these subtypes — it only applies the
+> $25,000 floor. Until it does, the filter must live in the tool. Tracked as a
+> known issue found 2026-10-14.
+
+**Indexes required** — a filter+sort over 86k listings collscans without them:
+
+```js
+db.unified_listings.createIndex(
+  { city: 1, "cashflowStats.scenarios.down20.monthlyCashflow": -1 },
+  { name: "city_cashflow20" });
+db.unified_listings.createIndex(
+  { postalCode: 1, "cashflowStats.scenarios.down20.monthlyCashflow": -1 },
+  { name: "zip_cashflow20" });
+```
+
+Equivalents are needed for the two seasonal paths if you expose those sorts.
+
+> ### ⚠ Read every figure from the strategy you filtered on
+>
+> `cashflowStats.breakEvenDownPct`, `.rentEstimate` and `.scenarios` at the **top
+> level are long-term only**. If you filter for listings that cash-flow
+> *seasonally* and then display the top-level break-even, you are describing a
+> different investment than the list you just built — the long-term figure will
+> typically be far worse and the result reads as nonsense.
+>
+> This exact bug shipped in `build-cashflow-profile.py` and was fixed on
+> 2026-10-14 (commit `6ade664`): its `top*` listing arrays quoted long-term
+> economics for the seasonal lists. Take the whole set — cash flow, break-even
+> and rent — from one `strategyBlock`.
+
+> **Prefer the area rollup when the question is about an area.**
+> "What could cash-flow in PDCC?" is answered better and cheaper by one
+> `findOne` on `cashflowProfile` — see
+> [cashflow-profile.md](cashflow-profile.md). Use this per-listing path when the
+> user wants actual listings back.
 
 ## Shape
 

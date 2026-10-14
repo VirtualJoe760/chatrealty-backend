@@ -125,6 +125,15 @@ floor; **every ranking tool needs equivalent guards** — a price floor, a
 non-zero `livingArea`, a plausible range. Without them, the tool's headline
 result is its worst record.
 
+**Fractional ownership is the subtler version of the same trap.** 72985 Somera
+Road is listed at $289,000 for a 4-bedroom, 3,163 sqft home — because it is a
+`Co-Ownership` **share**, not the house. Rent gets estimated for the whole
+property, the implied yield comes out at 23.3%, and it ranks as the single best
+cash-flowing listing in Palm Desert. 19 such listings currently show as
+cash-flowing across `Co-Ownership`, `Own Your Own` and `Timeshare`. They are 2%
+of results and most of the top of the list. Exclude these subtypes in any
+ranking or cash-flow tool — details in `docs/tools/listing-cashflow.md`.
+
 **Also: don't trust an index to mean a field exists.** `unified_listings` has
 indexes named `daysOnMarket_listPrice`, `beds_baths_listPrice` and
 `city_beds_listPrice`, but `daysOnMarket`, `beds` and `baths` are **0%
