@@ -16,6 +16,8 @@ cma/
 ├── build-listing-cma.py         ← Weekly: cmaStats on every active sale listing
 ├── build-rate-profiles.py       ← Mon–Sat: per-listing seasonal rateProfile (lease remarks)
 ├── build-rent-rates.py          ← Tue+Fri 2 AM: rentStats "going rate" per subdivision + ZIP
+├── build-seasonal-rates.py      ← Mon+Thu: seasonal rates from ACTIVE tiered rateProfiles
+├── build-closed-seasonal-rates.py ← Mon+Thu: seasonal rates from CLOSED leases (P4.6)
 └── build-cashflow.py            ← Tue+Fri (after rent-rates): cashflowStats per sale listing
 ```
 
@@ -45,6 +47,65 @@ python3 build-cashflow.py --city "Palm Desert" --dry-run
 python3 build-cashflow.py --all
 python3 build-cashflow.py --all --rate 0.0675 --skip-fresh-hours 60
 ```
+
+### Two seasonal layers, deliberately kept apart
+
+`build-seasonal-rates.py` reads `rateProfile` off **active** leases. Only ~4.75%
+of those profiles parse as "tiered", so it runs on roughly 750 listings
+valley-wide — which is why 318 of 333 subdivisions come back "insufficient" for
+seasonal and the PDCC showcase's 4-bedroom headline rested on 2 comps.
+
+`build-closed-seasonal-rates.py` (P4.6) adds a second, independent source: the
+254,809 **closed** leases back to 2020-08-28, where `closePrice` is rent
+actually achieved rather than rent asked. It writes a separate
+`closedSeasonal` block and never touches `seasonal`, so the two can be compared
+instead of silently blended.
+
+They are not interchangeable, and the split is not stylistic:
+
+| | active tiered layer | closed-lease layer |
+|---|---|---|
+| rate LEVEL | asking | achieved ✅ |
+| sample | ~750 valley-wide | 254,809 statewide |
+| peak MONTHS | real, parsed from remarks ✅ | **unavailable** |
+
+The closed layer cannot supply peak months. Close dates record when a deal was
+struck, not which months it covers — seasonal leases are booked well ahead — so
+the high-price tail is the same size in season and out (92211 3bd: 13.0%
+in-season vs 12.8% off-season). It therefore takes `peakMonths` from the active
+layer when one exists and labels the source.
+
+A seasonal lease is selected by PRICE — a close at or above 2x its own
+(ZIP, beds) cell median — with the `furnished` field as corroboration, not as
+the selector. "Furnished ⇒ seasonal" was tried and is wrong: 85% of furnished
+closes are furnished *annual* rentals priced at $3,450 against a $3,250
+unfurnished median, and selecting on the flag collapsed ZIP 92211 to a $3,500
+"seasonal" rate. Price selection puts it at $10,000 against a $2,800 long-term
+baseline. The flag's value is validation: on rows carrying both signals, 14.8%
+of furnished closes land in the tail against 0.6% of unfurnished — a 25x
+enrichment, which is what licenses using price alone where the flag is absent
+(it is ~97% null overall, but present on 96% of GPS/Coachella Valley closes).
+
+```bash
+python3 build-closed-seasonal-rates.py --zip 92211 --dry-run
+python3 build-closed-seasonal-rates.py --slug palm-desert-country-club --dry-run
+python3 build-closed-seasonal-rates.py --all
+```
+
+**The threshold truncates its own sample, deliberately.** Nothing below 2x can
+enter the cohort, so `seasonalRate` is not "the typical seasonal rent" — it is
+what leases priced at a clearly seasonal level achieved, and it reads high next
+to the active layer (92211: $10,000 achieved vs $6,000 median tiered asking).
+Both are correct answers to different questions. Loosening the multiple drags
+furnished-annual rentals back in, which is the failure the selector exists to
+prevent.
+
+Unit discipline is the same as the active layer: `seasonalRate` is an in-season
+MONTHLY rate. Only `annualizedMonthlyBlended` (peak months at the seasonal
+rate, the rest at the long-term baseline) and `annualizedMonthlyPeakOnly`
+(the rest at zero — the floor) may feed cash-flow math.
+
+---
 
 Financing defaults (all CLI-overridable, echoed into `cashflowStats.assumptions`): 7.0%/30-yr loan, 1.25% tax (derived from price — no `taxAnnualAmount` in MLS; Mello-Roos not modeled), 0.4% insurance, 5% vacancy, 8% management, 5% maintenance, 3% closing.
 
