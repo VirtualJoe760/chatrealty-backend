@@ -105,6 +105,10 @@ BULK = 500
 RETRIES = 3
 RETRY_SLEEP = 3
 PAGE_SLEEP = 0.2
+EMPTY_PAGE_RETRIES = 4      # a 200 with no Results means throttled, not done
+EMPTY_PAGE_SLEEP = 15
+MLS_COOLDOWN = 5            # breathe between MLSs so the next count survives
+SHORTFALL_TOLERANCE = 0.02  # fetched vs reported count
 
 HEADERS = {
     "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -223,17 +227,30 @@ def fetch_mls(mls_source: str, mls_id: str, *, page_cap=None, verbose=False):
     flt = f"MlsId Eq '{mls_id}' And UserType Eq 'Member'"
 
     total = None
-    try:
-        r = requests.get(BASE_URL, headers=HEADERS, timeout=60,
-                         params={"_filter": flt, "_pagination": "count"})
-        if r.status_code == 200:
-            total = ((r.json().get("D") or {}).get("Pagination") or {}).get("TotalRows")
-    except requests.RequestException:
-        pass
+    for attempt in range(RETRIES):
+        try:
+            r = requests.get(BASE_URL, headers=HEADERS, timeout=60,
+                             params={"_filter": flt, "_pagination": "count"})
+            if r.status_code == 200:
+                total = ((r.json().get("D") or {})
+                         .get("Pagination") or {}).get("TotalRows")
+                break
+            if r.status_code in (429, 500, 502, 503, 504):
+                time.sleep(RETRY_SLEEP * (attempt + 1))
+                continue
+            print(f"  {mls_source:22s} ! count HTTP {r.status_code}: "
+                  f"{r.text[:120]}", flush=True)
+            break
+        except requests.RequestException as e:
+            if attempt == RETRIES - 1:
+                print(f"  {mls_source:22s} ! count {type(e).__name__}", flush=True)
+            else:
+                time.sleep(RETRY_SLEEP * (attempt + 1))
     print(f"  {mls_source:22s} roster size: "
           f"{total if total is not None else 'unknown'}", flush=True)
+    yield ("__total__", total)
 
-    skiptoken, page, seen = "", 0, 0
+    skiptoken, page, seen, empty_retries = "", 0, 0, 0
     while True:
         params = {"_filter": flt, "_limit": PAGE_SIZE, "_skiptoken": skiptoken}
         batch, new_token, ok = [], None, False
@@ -258,11 +275,35 @@ def fetch_mls(mls_source: str, mls_id: str, *, page_cap=None, verbose=False):
                     return
                 time.sleep(RETRY_SLEEP * (attempt + 1))
 
-        if not ok or not batch:
+        if not ok:
+            return
+
+        # A 200 with no Results is NOT "end of roster" — it is what the API
+        # returns when it throttles us, and it happens on ANY page, not just
+        # the first. On 2026-10-15 this silently fetched 0 members for BRIDGE
+        # and HIGH_DESERT and stopped SOUTHLAND after one page of 500, while
+        # the job still exited 0.
+        #
+        # The reported count tells us whether an empty page is plausible: if
+        # we have seen fewer rows than the roster holds, the page is premature
+        # and we back off instead of believing it. Retries reset after any
+        # successful page, so a long roster is not capped by one bad patch.
+        if not batch:
+            premature = total is None or seen < total
+            if premature and empty_retries < EMPTY_PAGE_RETRIES:
+                empty_retries += 1
+                wait = EMPTY_PAGE_SLEEP * empty_retries
+                print(f"    empty page at {seen:,}"
+                      f"{f'/{total:,}' if total else ''} — throttled? retry "
+                      f"{empty_retries}/{EMPTY_PAGE_RETRIES} in {wait}s",
+                      flush=True)
+                time.sleep(wait)
+                continue
             return
 
         page += 1
         seen += len(batch)
+        empty_retries = 0      # a good page clears the backoff budget
         yield batch
         if verbose:
             print(f"    page {page:>4}  +{len(batch):<4} = {seen:>7,}"
@@ -326,11 +367,17 @@ def main():
 
     t0 = time.time()
     grand, skipped = 0, 0
+    report = {}
 
-    for mls_source, mls_id in targets.items():
-        got, ops = 0, []
+    for i, (mls_source, mls_id) in enumerate(targets.items()):
+        if i:
+            time.sleep(MLS_COOLDOWN)
+        got, ops, expected = 0, [], None
         for batch in fetch_mls(mls_source, mls_id,
                                page_cap=args.page_cap, verbose=args.verbose):
+            if isinstance(batch, tuple) and batch[0] == "__total__":
+                expected = batch[1]
+                continue
             for acct in batch:
                 doc = to_doc(acct, mls_source, now, build_id)
                 if doc is None:
@@ -344,10 +391,27 @@ def main():
         if ops and not args.dry_run:
             db[ROSTER].bulk_write(ops, ordered=False)
         grand += got
-        print(f"  {mls_source:22s} -> {got:>7,} members", flush=True)
+        report[mls_source] = (expected, got)
+        short = ("" if expected in (None, 0) or got >= expected * (1 - SHORTFALL_TOLERANCE)
+                 else f"   SHORT by {expected - got:,}")
+        print(f"  {mls_source:22s} -> {got:>7,} members"
+              f"{'  (expected ' + format(expected, ',') + ')' if expected else ''}"
+              f"{short}", flush=True)
 
     print(f"\n  total members: {grand:,}"
           f"{f'  ({skipped} skipped for no Id)' if skipped else ''}")
+
+    # A partial sync must NOT look like a success. cron chains this with && to
+    # build-agents.py, so exiting non-zero is what stops the builder joining a
+    # roster that is missing whole MLSs. The stale rows from the previous run
+    # stay in place and still serve reads; they are just not refreshed.
+    failed = [m for m, (exp, got) in report.items()
+              if got == 0 or (exp and got < exp * (1 - SHORTFALL_TOLERANCE))]
+    if not args.dry_run:
+        stale = db[ROSTER].count_documents({"buildId": {"$ne": build_id}})
+        if stale:
+            print(f"  not refreshed by this run: {stale:,} rows "
+                  f"(kept — previous values still serve reads)")
 
     if not args.dry_run:
         ensure_indexes(db)
@@ -359,6 +423,14 @@ def main():
               f"  | joinable {joinable:,}"
               f"  | email {with_email:,}"
               f"  | licence {with_lic:,}")
+
+    if failed:
+        print(f"\nFAILED for {len(failed)} MLS(s): {', '.join(failed)}")
+        print(f"  Re-run just those, e.g. "
+              f"--mls {failed[0]}. Exiting non-zero so a chained "
+              f"build-agents.py does not join a partial roster.")
+        print(f"\ndone in {(time.time()-t0)/60:.1f} min\n")
+        sys.exit(1)
 
     print(f"\ndone in {(time.time()-t0)/60:.1f} min\n")
 
