@@ -62,7 +62,8 @@ tool should return, and the absent case.
 | `cmaStats` | `unified_listings` | `build-listing-cma.py` | 46,768 listings | [cma-comps.md](cma-comps.md) |
 | `rateProfile` | `unified_listings` (lease) | `build-rate-profiles.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
 | *(whole doc)* | **`agents`** | `build-agents.py` | 240,236 agents | [agents.md](agents.md) |
-| *(whole doc)* | **`brokerages`** | `build-agents.py` | 29,703 brokerages | [agents.md](agents.md) |
+| *(whole doc)* | **`brokerages`** | `build-agents.py` | 29,719 brokerages | [agents.md](agents.md) |
+| *(whole doc)* | **`agent_roster`** | `sync-agents-roster.py` | 158,920 members | [agents.md](agents.md) |
 
 > All coverage counts measured against production on **2026-10-14**. Most are
 > not 100% and never will be — thin markets genuinely lack comps. **Always
@@ -160,3 +161,10 @@ Known gaps as of 2026-10-14 — data is shipped and scheduled, no tool reads it:
 
 The first row is the highest-value one: `cashflowProfile` was built precisely so
 that a whole-area cash-flow answer costs one `findOne`.
+
+---
+
+To wire the agent and brokerage collections into the frontend, hand
+[frontend-agent-prompt.md](frontend-agent-prompt.md) to that repo's agent — it is a
+self-contained spec of both document shapes, the indexes, and the nine ways to
+get a wrong answer out of them.
