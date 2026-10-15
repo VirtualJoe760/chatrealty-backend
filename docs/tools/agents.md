@@ -406,6 +406,107 @@ returning an empty list.
 
 ---
 
+## Reading it from the frontend
+
+`agents`, `brokerages` and `agent_roster` are three ordinary collections in the
+same cluster the frontend already connects to (db `admin`), so the frontend does
+not need the MCP server to read them — it needs a model. The MCP tools exist so
+an LLM can ask questions in natural language; a Next.js route should query Mongo
+directly and skip the round trip.
+
+**They are read-only to the frontend.** `build-agents.py` rebuilds both
+collections wholesale and then deletes every document whose `buildId` is not the
+current one, so anything the frontend writes is gone by Tuesday 3 AM. Store
+references to a brokerage as its `slug` and nothing else.
+
+`_id` *is* the slug, so a route maps straight onto a primary-key lookup with no
+secondary index and no extra field:
+
+```ts
+// models/Brokerage.ts
+import mongoose, { Schema } from "mongoose";
+
+const CityStat   = new Schema({ city: String, slug: String, agents: Number,
+                                active: Number, closed: Number }, { _id: false });
+const Office     = new Schema({ mlsId: String, name: String, phone: String,
+                                agents: Number }, { _id: false });
+const TopAgent   = new Schema({ _id: String, name: String, slug: String,
+                                city: String, activeListings: Number,
+                                closedDeals: Number, closedVolume: Number },
+                              { _id: false });
+
+const BrokerageSchema = new Schema({
+  _id:  String,              // === slug, e.g. "compass"
+  name: String, slug: String, normalizedName: String,
+  agentCount: Number, agentsWithLiveInventory: Number, officeCount: Number,
+  offices: [Office],
+  mlsSources: [String],
+  active: { listings: Number, volume: Number, inEscrow: Number },
+  closed: { deals: Number, volume: Number,
+            last12moDeals: Number, last12moVolume: Number },
+  cities: [CityStat],
+  cityCount: Number, primaryCity: String, primaryCitySlug: String,
+  topAgents: [TopAgent],
+  lastUpdated: Date,
+}, { collection: "brokerages", versionKey: false });
+
+export const Brokerage =
+  mongoose.models.Brokerage ?? mongoose.model("Brokerage", BrokerageSchema);
+```
+
+```ts
+// app/brokerages/[slug]/page.tsx  — one brokerage in full
+const b = await Brokerage.findById(params.slug).lean();
+
+// app/brokerages/page.tsx  — biggest statewide, uses closedVolume_-1
+const rows = await Brokerage.find({}, "name slug agentCount active closed primaryCity")
+  .sort({ "closed.volume": -1 }).limit(25).lean();
+
+// biggest in one city — uses the cities_volume compound index
+const local = await Brokerage.find({ "cities.slug": "la-quinta" })
+  .sort({ "closed.volume": -1 }).limit(25).lean();
+```
+
+The seven indexes the builder maintains on `brokerages` cover exactly these
+access patterns: `slug`, `normalizedName`, `closed.volume`, `active.listings`,
+`agentCount`, `cities.slug + closed.volume`, `primaryCitySlug`. Sorting a city
+page by a *per-city* figure (`cities.$.closed`) cannot use an index — Mongo
+can't sort on a matched array element — so filter by `cities.slug` and sort by
+the brand-wide total, or read the per-city numbers out of the `cities` array
+after the fetch.
+
+Its agents are `agents` documents, not embedded: `topAgents` is a denormalized
+top-25 for a brokerage card. For the full roster, query the other collection —
+`brokerage_volume` (`brokerage.slug` + `production.windowVolume`) and
+`city_brokerage` are indexed for it:
+
+```ts
+const agents = await Agent.find({ "brokerage.slug": "compass" })
+  .sort({ "production.windowVolume": -1 }).limit(50).lean();
+```
+
+Two caveats to surface in the UI, both carried in the MCP tool responses for the
+same reason.
+
+`agentCount` is a **floor, not a roster size.** 31% of active listings report
+the `"Unknown Office"` sentinel, which is absent data rather than a brokerage,
+so it is dropped: 1,393 agents end up with no `brokerage` subdocument at all
+(check `coverage.officeKnown`), and 21,221 more have at least one office-less
+listing (`coverage.officeUnknownListings > 0`) and were attributed from the
+rest of their work. A brand's real headcount is higher than what is here.
+
+`agents` holds one document per **MLS registration, not per person** — someone
+licensed in two MLSs appears twice, and both copies count toward their
+brokerage. 100,639 records carry an `identity.personId`; dedupe on it before
+showing any count to a user.
+
+If the frontend ever does want the tools rather than the collections (so Claude
+can answer brokerage questions inside the app), run the same server over HTTP
+and point an MCP client at it — that's the `--transport streamable-http` line
+above, and `docs/db/vps-migration-plan.md` covers exposing it.
+
+---
+
 ## Rebuilding
 
 ```bash

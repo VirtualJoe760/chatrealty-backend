@@ -589,9 +589,12 @@ def list_brokerages(
         "scope": {"city": city} if city else "statewide",
         **_capped(rows, total, limit), **_freshness(),
         "note": ("Counts cover agents who listed or closed in the window, not "
-                 "a brokerage's official roster. 31% of active listings report "
-                 "'Unknown Office', and those agents have no brokerage here at "
-                 "all, so these totals are a floor."),
+                 "a brokerage's official roster, and they count MLS "
+                 "registrations rather than people. 31% of active listings "
+                 "report the 'Unknown Office' sentinel, which is dropped as "
+                 "absent data: 1,393 agents get no brokerage at all and 21,221 "
+                 "more were attributed from only part of their work. Every "
+                 "total here is a floor."),
     }
 
 
