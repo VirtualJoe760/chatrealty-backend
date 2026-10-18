@@ -1,8 +1,10 @@
 # `cashflowProfile` — the one-findOne cash-flow answer
 
-**Producer:** `src/scripts/cma/build-cashflow-profile.py`
+**Producer:** `src/scripts/investor/build-cashflow-profile.py`
 **Lives on:** `subdivisions` and `cities`, keyed by `slug`
-**Coverage:** 741 of 1,426 subdivisions · 836 of 1,047 cities *(2026-10-14)*
+**Coverage:** roughly half of 1,426 subdivisions and four fifths of 1,047 cities;
+a profile is written only where scored listings exist. Query the collection for
+the current count.
 **Refreshed:** Tue + Fri 2 AM, last stage of the chain
 **Backs:** an area cash-flow MCP tool — **does not exist yet**, highest-value gap
 

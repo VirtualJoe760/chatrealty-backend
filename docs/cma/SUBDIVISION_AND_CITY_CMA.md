@@ -1,8 +1,8 @@
 # Subdivision & City CMA — Architecture
 
-**Location**: `/root/jpsrealtor/docs/cma/SUBDIVISION_AND_CITY_CMA.md`
-**Last Updated**: 2026-04-22
-**Status**: Subdivision CMA is live; City CMA is planned (roll-up from subdivisions)
+**Producer**: `src/scripts/comps/build-subdivision-cma.py`
+**Lives on**: `subdivisions.cmaStats`
+**Status**: subdivision CMA is built; city CMA is not
 
 ---
 
@@ -42,7 +42,7 @@ Explicitly **not** used by the subdivision CMA:
 
 ## The `cmaStats` subdocument
 
-Written to each subdivision as `{ $set: { cmaStats: {...} } }`. See [`src/scripts/cma/README.md`](../../src/scripts/cma/README.md) for the full field list; here's the shape reference:
+Written to each subdivision as `{ $set: { cmaStats: {...} } }`. See [`src/scripts/rental/README.md`](../../src/scripts/rental/README.md) for the full field list; here's the shape reference:
 
 ```ts
 cmaStats: {
@@ -98,7 +98,7 @@ cmaStats: {
 
 ### Scope is "existing subdivisions only"
 
-The builder does **not** auto-seed new subdivision docs. If listings reference a `subdivisionName` that has no matching `subdivisions.name` doc, those listings simply don't contribute to any CMA. This is a known limitation (see [Orphan rate](#orphan-rate-limitation)) and is addressed by a separate alias-mapping pipeline that isn't rebuilt in the current codebase.
+The builder does **not** auto-seed new subdivision docs. If listings reference a `subdivisionName` that has no matching `subdivisions.name` doc, those listings simply don't contribute to any CMA. See [Subdivision matching and the orphan rate](#subdivision-matching-and-the-orphan-rate).
 
 Rationale: subdivision docs carry manually-curated content (descriptions, photos, community features) that shouldn't be auto-created from a stray typo in a listing. Auto-seeding belongs in `audit-subdivision-coverage.py` + human review.
 
@@ -176,50 +176,62 @@ Design for `build-city-cma.py` when we get to it:
 
 1. Iterate `cities` collection.
 2. For each city, aggregate across all `subdivisions.cmaStats` in that city (weighted by each sub's total count).
-3. Plus a `"non-subdivision"` bucket computed from `unified_listings` + `unified_closed_listings` where `city == X` and `subdivisionName` doesn't match any known subdivision or its aliases. This catches the ~43% orphan listings that never contribute to a subdivision CMA.
+3. Plus a `"non-subdivision"` bucket computed from `unified_listings` + `unified_closed_listings` where `city == X` and `subdivisionName` doesn't match any known subdivision or its aliases. This catches the orphaned listings that never contribute to a subdivision CMA.
 4. Write `cmaStats` onto the city doc, same shape as subdivisions but without the `topComps` narrowing.
 
 Runs at **08:30** (after subdivisions at 08:00, before photo caching at 09:00).
 
 ---
 
-## Orphan-rate limitation
+## Subdivision matching and the orphan rate
 
-Historically ~43% of `subdivisionName` values in Palm Springs listings don't exactly match any `subdivisions.name`. Examples:
+The builder matches `unified_listings.subdivisionName` against `subdivisions.name`
+by case-insensitive exact match within the same city. No fuzzy matching, no
+aliases, and no auto-seeding of new subdivision docs.
 
-- `"Indian Ridge"` in listings vs `"Indian Ridge Country Club"` as the subdivision doc (name variant)
-- `"48 @ Arenas"` with no matching doc (genuinely unseeded community)
-- `"Alpine Village/Pyn P"` — dirty slash/abbreviation in the listing data
+Two numbers bound what that rule can reach. Only 5,808 of 86,734 active listings
+carry a `subdivisionName` at all, and **29.1% of those (1,690) match no
+`subdivisions` doc**. An orphaned listing contributes to no subdivision CMA.
 
-Those listings don't contribute to any subdivision's `cmaStats` under the current exact-match rule. Consequence: known high-value communities (Indian Ridge CC, Desert Willow, Palm Desert Greens CC, The Sommerset, Outdoor Resorts PS, Silver Spur Mobile Manor, etc.) came back `confidence: "insufficient"` when they shouldn't have.
+Three things produce an orphan:
 
-### Fix (two-phase, lives in a future audit pipeline)
+- a name variant — `"Indian Ridge"` on the listing against `"Indian Ridge
+  Country Club"` as the doc
+- an unseeded community — `"48 @ Arenas"` has no doc at all
+- dirty source data — `"Alpine Village/Pyn P"`, with a slash and an abbreviation
 
-**Phase A — Diagnostic (`audit-subdivision-coverage.py`, read-only)**
-- Per city, three-way diff of listing names vs subdivision doc names
-- Fuzzy-match orphan docs against unmatched listing names
-- Output two CSVs for human review:
-  - `proposed_aliases.csv` — orphan doc + suggested aliases + listing counts
-  - `proposed_new_subdivisions.csv` — unmatched listing names with ≥3 listings
+The cost lands on exactly the wrong communities: high-value, manually curated
+ones such as Indian Ridge CC, Desert Willow and Palm Desert Greens CC report
+`confidence: "insufficient"` while real comps sit in the orphan pile.
 
-**Phase B — Apply approved aliases (`apply-shadow-merges.py`)**
-- Adds `aliases: string[]` field to approved subdivision docs
-- Updates `build-subdivision-cma.py`'s match clause to:
-  ```python
-  {"$or": [
-      {"subdivisionName": {"$regex": f"^{name}$", "$options": "i"}},
-      {"subdivisionName": {"$in": sub.get("aliases", [])}},
-  ]}
-  ```
+### What alias support requires
 
-Neither script is currently in the tree. **Memory note**: these existed on the old server and demonstrably resolved the orphan issue. When reconnecting to the real repo, pull them in.
+An alias-aware build needs an `aliases: string[]` field on the subdivision doc
+and a widened match clause:
+
+```python
+{"$or": [
+    {"subdivisionName": {"$regex": f"^{name}$", "$options": "i"}},
+    {"subdivisionName": {"$in": sub.get("aliases", [])}},
+]}
+```
+
+Populating `aliases` needs a read-only diff of listing names against doc names
+per city, fuzzy-matched, reviewed by a human before anything is written — a
+wrong alias silently merges two unrelated communities' comps, which is worse
+than an orphan. An earlier deployment of this repo carried that tooling
+(`audit-subdivision-coverage.py`, `apply-shadow-merges.py`); neither is in the
+tree.
+
+---
+
 
 ---
 
 ## Related
 
-- **Code**: [`src/scripts/cma/build-subdivision-cma.py`](../../src/scripts/cma/build-subdivision-cma.py)
-- **Upstream pipeline docs**: [`src/scripts/mls/backend/unified/README.md`](../../src/scripts/mls/backend/unified/README.md)
-- **Closed-listings docs**: [`src/scripts/mls/backend/unified/closed/README.md`](../../src/scripts/mls/backend/unified/closed/README.md)
+- **Code**: [`src/scripts/comps/build-subdivision-cma.py`](../../src/scripts/comps/build-subdivision-cma.py)
+- **Upstream pipeline docs**: [`src/scripts/ingest/README.md`](../../src/scripts/ingest/README.md)
+- **Closed-listings docs**: [`src/scripts/historical/README.md`](../../src/scripts/historical/README.md)
 - **Cron schedule**: `/root/crontab.vps`
 - **CMA output log**: `/var/log/cma/build-subdivision-cma.log`

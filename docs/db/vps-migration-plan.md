@@ -176,7 +176,7 @@ agent database on 2026-10-14.
   exempt and reach back to 2020-08-28, past the nominal 5-year horizon.
 
 Both query shapes exist in the current CMA builders:
-`build-pool-premium.py:257`, `build-rent-rates.py:422` and
+`build-pool-premium.py:257`, `build-going-rates.py:422` and
 `build-closed-seasonal-rates.py:512` compare against datetimes, while
 `build-listing-cma.py:534` compares against an `.isoformat()` string. Each is
 losing a slice of the collection. The builders are right to normalize in Python

@@ -1,0 +1,69 @@
+# Database — Operational Constraints
+
+Facts about this cluster that the code does not record. Read before any
+destructive database work.
+
+## There are no backups
+
+The only protection for the `admin` database is whatever DigitalOcean's managed
+snapshots cover. Nothing in this repo or on this host takes a backup:
+
+- The 2 AM backup cron in `crontab.vps` is commented out.
+- `/usr/local/bin/backup_payload_db.sh` does not exist.
+- `mongodb-database-tools` is not installed, so `mongodump` is unavailable.
+
+**Before dropping a collection, running a mass update, or any migration, take an
+explicit JSON export of what you are about to touch and verify it.** There is
+nothing to fall back on. Exports belong in `/root/backups/` with a sha256
+manifest beside them.
+
+## One cluster, two names
+
+The SRV alias `jpsrealtor-mongodb-911080c1.mongo.ondigitalocean.com` resolves to
+node `jpsrealtor-mongodb-3455c31a`. These are the same cluster and the same
+`admin` database.
+
+pymongo prints the resolved node name in errors while connection strings carry
+the alias, so the same cluster reads as two different databases in a stack
+trace. Treat `911080c1` and `3455c31a` as one.
+
+## Application data lives in `admin`
+
+All application collections are in `admin`, which Mongo reserves for its auth
+and role system. Application data belongs in a dedicated database. Moving it is
+a pending migration, not a current-state fact — nothing reads from anywhere
+else today.
+
+Two consequences in practice: a connection with cluster-admin scope is required
+for ordinary reads, and Mongo's own internal collections (`system.keys`,
+`system.version`) sit in the same namespace as application data. Any script that
+enumerates collections must skip `system.*`, or it will fail unauthorized partway
+through a loop that otherwise works.
+
+## The legacy per-MLS collections are dormant
+
+A second writer used to point at this cluster: a Windows scheduled task on the
+developer PC (`JPS Realtor MLS Sync`, daily at 3 AM Pacific, from
+`F:\web-clients\joseph-sardella\jpsrealtor\`) running per-MLS scripts.
+
+Those collections still exist and still hold data, but nothing has written to
+them since 2026-07-07:
+
+| Collection | Docs | Superseded by |
+|---|---:|---|
+| `listings` | 12,126 | `unified_listings` |
+| `crmls_listings` | 136,863 | `unified_listings`, `unified_off_market` |
+| `crmlsClosedListings` | 94,226 | `unified_closed_listings` |
+| `gpsClosedListings` | 56,029 | `unified_closed_listings` |
+| `closed_listings` | 28,839 | `unified_closed_listings` |
+| `temp_flattened` | 3,198 | nothing — one-off scratch |
+
+The unified pipeline covers all 8 MLSs and its collections are canonical. The
+legacy data is a strict subset of the unified collections for the same MLSs,
+verified by sampling `listingKey`. It is redundant storage and safe to drop once
+the dev-PC task is confirmed off.
+
+Mongoose model registration also created empty pluralization shadows
+(`crmlsclosedlistings`, `gpsclosedlistings`) and pass-through views
+(`unifiedlistings`, `unifiedclosedlistings`) that exist only so an auto-pluralized
+model name resolves to the real collection.

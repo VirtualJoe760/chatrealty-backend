@@ -302,7 +302,7 @@ Composed from six stages, each writing its own fields:
 |---|---|---|
 | Price/DOM aggregates | `build-subdivision-cma.py` | `cmaStats.active` |
 | Bed mix + prevalences | `build-inventory-profile.py` | `inventoryProfile`, `cmaStats.active.bedMix` |
-| Long-term going rate | `build-rent-rates.py` | `rentStats`, `rent_rates` |
+| Long-term going rate | `build-going-rates.py` | `rentStats`, `rent_rates` |
 | Seasonal rates | `build-seasonal-rates.py` | `rentStats.seasonal`, `dominantPostalCode` |
 | Private-pool premium | `build-pool-premium.py` | `rentStats.poolPremium` |
 | Per-listing economics | `build-cashflow.py` | `cashflowStats.strategies`, `breakEvenDownPct` |

@@ -15,8 +15,8 @@ src/scripts/
 └── cma/                   Analytics precompute:
     ├── build-subdivision-cma.py   cmaStats (sale comps) per subdivision
     ├── build-listing-cma.py       cmaStats per active sale listing
-    ├── build-rate-profiles.py     per-listing seasonal rent rateProfile
-    ├── build-rent-rates.py        rentStats "going rate" per subdivision + ZIP
+    ├── build-rate-profile.py     per-listing seasonal rent rateProfile
+    ├── build-going-rates.py        rentStats "going rate" per subdivision + ZIP
     └── build-cashflow.py          cashflowStats (rental investment math) per listing
 ```
 
@@ -25,7 +25,7 @@ src/scripts/
 | Concern | Producer | Output |
 |---|---|---|
 | Sale comps | `build-subdivision-cma.py`, `build-listing-cma.py` | `cmaStats` |
-| Rental going rate | `build-rent-rates.py` | `subdivisions.rentStats`, `rent_rates` collection |
+| Rental going rate | `build-going-rates.py` | `subdivisions.rentStats`, `rent_rates` collection |
 | Seasonal rates (asking) | `build-seasonal-rates.py` | `rentStats.seasonal` |
 | Seasonal rates (achieved) | `build-closed-seasonal-rates.py` | `rentStats.closedSeasonal` |
 | Private-pool rent lift | `build-pool-premium.py` | `rentStats.poolPremium` |

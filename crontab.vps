@@ -10,24 +10,24 @@
 # MEASURED 2026-10-13: last run took 48 hr (2,892 min), not ~11 hr. It overruns
 # into Mon/Tue, so the Sunday rate-profiles skip below no longer buys it a clear
 # window. Needs either more workers or a narrower --all scope.
-0 1 * * 0 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1
+0 1 * * 0 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/comps/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1
 
 # ── MLS full sync — Sunday 3 AM (catches missed listings, refreshes all data) ─
-0 3 * * 0 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/run-pipeline.py --all >> /var/log/mls-update-full.log 2>&1
+0 3 * * 0 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/ingest/run-pipeline.py --all >> /var/log/mls-update-full.log 2>&1
 
 # ── Search Index — daily 4 AM ────────────────────────────────────────────────
 # MEASURED 2026-10-13: 2.5 hr (8,974 s), not ~75 min — now overlaps the 6 AM
 # incremental sync.
-0 4 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/mls/backend/build_search_index.py >> local-logs/search-index-cron.log 2>&1
+0 4 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/search/build-search-index.py >> local-logs/search-index-cron.log 2>&1
 
 # ── MLS incremental sync — Mon-Sat 6 AM (25-hour window catches all changes) ─
-0 6 * * 1-6 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/run-pipeline.py --all --incremental >> /var/log/mls-update.log 2>&1
+0 6 * * 1-6 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/ingest/run-pipeline.py --all --incremental >> /var/log/mls-update.log 2>&1
 
 # ── MLS status update — daily 7 AM (Active/Pending across all 8 MLSs) ────────
-0 7 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/update-status.py >> /var/log/mls-status-update.log 2>&1
+0 7 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/ingest/update-status.py >> /var/log/mls-status-update.log 2>&1
 
 # ── Subdivision CMA — daily 8 AM (~55 min) ───────────────────────────────────
-0 8 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-subdivision-cma.py --all >> local-logs/subdivision-cma-cron.log 2>&1
+0 8 * * * cd /root/jpsrealtor && .venv/bin/python3 src/scripts/comps/build-subdivision-cma.py --all >> local-logs/subdivision-cma-cron.log 2>&1
 
 # ── Photo cache — RETIRED 2026-10-14 ─────────────────────────────────────────
 # Removed, not suspended. db.photos was dropped on 2026-10-14 and
@@ -49,11 +49,11 @@
 # the sibling .manifest.json) — see archive/README.md to restore.
 
 # ── Fetch photos (delta) — daily 9:30 AM ─────────────────────────────────────
-30 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/unified/fetch-photos.py --all --delta >> /var/log/mls-fetch-photos.log 2>&1
+30 9 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/ingest/fetch-photos.py --all --delta >> /var/log/mls-fetch-photos.log 2>&1
 
 # ── Rate Profiles — Mon-Sat 9:30 AM (~30-60 min) ─────────────────────────────
 # Skipped on Sundays so the weekly listing-CMA backfill below has Atlas to itself.
-30 9 * * 1-6 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-rate-profiles.py --all --workers 4 >> local-logs/rate-profiles-cron.log 2>&1
+30 9 * * 1-6 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/rental/build-rate-profile.py --all --workers 4 >> local-logs/rate-profiles-cron.log 2>&1
 
 # ── Seasonal rates — Tue & Fri 1:30 AM (chained, ~2 min) ────────────────────
 # Two independent seasonal sources, run in dependency order:
@@ -66,7 +66,7 @@
 # the same reason as rent-rates: rents move slowly and fidelity beats cadence.
 # Starts at 1:30 so both finish before the 2 AM rent-rates chain, which writes
 # different fields on the same rent_rates docs.
-30 1 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-seasonal-rates.py --all >> local-logs/seasonal-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-closed-seasonal-rates.py --all >> local-logs/closed-seasonal-rates-cron.log 2>&1
+30 1 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/rental/build-seasonal-rates.py --all >> local-logs/seasonal-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/rental/build-closed-seasonal-rates.py --all >> local-logs/closed-seasonal-rates-cron.log 2>&1
 
 # ── Rent Rates -> Cash-Flow -> Profile rollup — Tue & Fri 2 AM (~3.5 min) ────
 # MEASURED 2026-10-14, full chain: rent-rates 0.7 + pool-premium 0.6 +
@@ -91,10 +91,10 @@
 #
 # Twice weekly: rents move slowly and fidelity beats cadence
 # (see docs/cma/RENTAL_CASHFLOW.md). Powers the "cash-flowing listings" MCP tool.
-0 2 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-rent-rates.py --all >> local-logs/rent-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-pool-premium.py --all >> local-logs/pool-premium-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-cashflow.py --all >> local-logs/cashflow-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-inventory-profile.py --all >> local-logs/inventory-profile-cron.log 2>&1 && .venv/bin/python3 src/scripts/cma/build-cashflow-profile.py --all >> local-logs/cashflow-profile-cron.log 2>&1
+0 2 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/rental/build-going-rates.py --all >> local-logs/rent-rates-cron.log 2>&1 && .venv/bin/python3 src/scripts/rental/build-pool-premium.py --all >> local-logs/pool-premium-cron.log 2>&1 && .venv/bin/python3 src/scripts/investor/build-cashflow.py --all >> local-logs/cashflow-cron.log 2>&1 && .venv/bin/python3 src/scripts/investor/build-inventory-profile.py --all >> local-logs/inventory-profile-cron.log 2>&1 && .venv/bin/python3 src/scripts/investor/build-cashflow-profile.py --all >> local-logs/cashflow-profile-cron.log 2>&1
 
 # ── Historical closed listing sync — daily 10 AM ─────────────────────────────
-0 10 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/mls/backend/historical_closed_sync.py >> /var/log/mls-sync/historical-closed-sync.log 2>&1
+0 10 * * * cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/historical/sync.py >> /var/log/mls-sync/historical-closed-sync.log 2>&1
 
 # ── DISABLED jobs (kept for reference) ───────────────────────────────────────
 # Article request checker — /root/jpsrealtor/scripts/check-article-requests-simple.js not yet rebuilt
@@ -129,4 +129,4 @@
 # but writes only its own three collections, so it cannot corrupt another job's
 # input and does not need to wait on one. The pair must still finish before
 # build_search_index.py at 4 AM, which it does with roughly 25 minutes spare.
-0 3 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/agents/sync-agents-roster.py --all >> local-logs/agents-roster-cron.log 2>&1 && .venv/bin/python3 src/scripts/agents/build-agents.py --all >> local-logs/build-agents-cron.log 2>&1
+0 3 * * 2,5 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/agents/sync-roster.py --all >> local-logs/agents-roster-cron.log 2>&1 && .venv/bin/python3 src/scripts/agents/build-agents.py --all >> local-logs/build-agents-cron.log 2>&1

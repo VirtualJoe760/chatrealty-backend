@@ -2,7 +2,7 @@
 
 **Audience:** the Claude (or human) working on the frontend repo who needs to consume the pre-computed listing-level CMA produced by the backend.
 **Status:** backend pipeline live as of 2026-05-04. Riverside fully backfilled (7,073 listings); other counties pending.
-**Backend script:** `src/scripts/cma/build-listing-cma.py` (this VPS).
+**Backend script:** `src/scripts/comps/build-listing-cma.py` (this VPS).
 **Companion doc:** `docs/cma/SUBDIVISION_AND_CITY_CMA.md` — same pattern, different scope.
 
 ---
@@ -384,7 +384,7 @@ After full backfill, the cron at `0 1 * * 1,4` keeps it fresh. Listings whose `c
 
 ## Related backend docs
 
-- `src/scripts/cma/build-listing-cma.py` — the builder
+- `src/scripts/comps/build-listing-cma.py` — the builder
 - `docs/cma/SUBDIVISION_AND_CITY_CMA.md` — the same pattern at subdivision scope
-- `src/scripts/cma/README.md` — operational notes for both builders
+- `src/scripts/rental/README.md` — operational notes for both builders
 - `docs/db/current-state.md` — what's in the DB more broadly

@@ -259,7 +259,7 @@ output.
    script here at all.
 3. **Check `docs/tools/` first.** The data often already exists and only the
    tool is missing — there are five such gaps listed there right now.
-4. **If it needs a script:** build it in `src/scripts/cma/`, with a module
+4. **If it needs a script:** build it in the matching `src/scripts/` domain folder, with a module
    docstring that states inputs, output shape, fallback order and known limits.
    Support `--dry-run`, a single-target flag (`--slug` / `--zip` / `--city`),
    and `--all`.

@@ -224,4 +224,4 @@ And the custom-input path:
 > "What about with 30% down at a 6.5% rate?"  → re-derives without a rebuild.
 
 Backend reference (if you can access the backend repo): `docs/cma/RENTAL_CASHFLOW.md` is the full
-contract; `src/scripts/cma/build-rent-rates.py` + `build-cashflow.py` are the producers.
+contract; `src/scripts/rental/build-going-rates.py` + `build-cashflow.py` are the producers.

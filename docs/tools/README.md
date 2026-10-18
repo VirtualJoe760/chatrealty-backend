@@ -52,18 +52,18 @@ tool should return, and the absent case.
 |---|---|---|---:|---|
 | `cashflowProfile` | `subdivisions`, `cities` | `build-cashflow-profile.py` | 741 subs / 836 cities | [cashflow-profile.md](cashflow-profile.md) |
 | `cashflowStats` | `unified_listings` (sale) | `build-cashflow.py` | ~41.9k listings | [listing-cashflow.md](listing-cashflow.md) |
-| `rentStats` | `subdivisions` | `build-rent-rates.py` | 1,101 | [rent-rates.md](rent-rates.md) |
-| *(whole doc)* | `rent_rates` | `build-rent-rates.py` | 919 w/ `goingRate` | [rent-rates.md](rent-rates.md) |
+| `rentStats` | `subdivisions` | `build-going-rates.py` | 1,101 | [rent-rates.md](rent-rates.md) |
+| *(whole doc)* | `rent_rates` | `build-going-rates.py` | 919 w/ `goingRate` | [rent-rates.md](rent-rates.md) |
 | `rentStats.seasonal` | `subdivisions`, `rent_rates` | `build-seasonal-rates.py` | 459 subs / 763 ZIPs | [rent-rates.md](rent-rates.md) |
 | `rentStats.closedSeasonal` | `subdivisions`, `rent_rates` | `build-closed-seasonal-rates.py` | 948 subs / 1,015 ZIPs | [rent-rates.md](rent-rates.md) |
 | `rentStats.poolPremium` | `subdivisions`, `rent_rates` | `build-pool-premium.py` | 759 subs / 896 ZIPs | [rent-rates.md](rent-rates.md) |
 | `inventoryProfile` | `subdivisions`, `cities` | `build-inventory-profile.py` | 742 subs / 836 cities | [inventory-profile.md](inventory-profile.md) |
 | `cmaStats` | `subdivisions` | `build-subdivision-cma.py` | 1,426 | [cma-comps.md](cma-comps.md) |
 | `cmaStats` | `unified_listings` | `build-listing-cma.py` | 46,768 listings | [cma-comps.md](cma-comps.md) |
-| `rateProfile` | `unified_listings` (lease) | `build-rate-profiles.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
-| *(whole doc)* | **`agents`** | `build-agents.py` | 240,236 agents | [agents.md](agents.md) |
-| *(whole doc)* | **`brokerages`** | `build-agents.py` | 29,719 brokerages | [agents.md](agents.md) |
-| *(whole doc)* | **`agent_roster`** | `sync-agents-roster.py` | 158,920 members | [agents.md](agents.md) |
+| `rateProfile` | `unified_listings` (lease) | `build-rate-profile.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
+| *(whole doc)* | **`agents`** | `agents/build-agents.py` | 240,236 agents | [agents.md](agents.md) |
+| *(whole doc)* | **`brokerages`** | `agents/build-agents.py` | 29,719 brokerages | [agents.md](agents.md) |
+| *(whole doc)* | **`agent_roster`** | `sync-roster.py` | 158,920 members | [agents.md](agents.md) |
 
 > All coverage counts measured against production on **2026-10-14**. Most are
 > not 100% and never will be — thin markets genuinely lack comps. **Always
@@ -80,10 +80,10 @@ it when a user asks how current a figure is.
 |---|---|
 | Daily 7 AM | `update-status.py` (status inference) |
 | Daily 8 AM | `build-subdivision-cma.py --all` |
-| Daily 4 AM | `build_search_index.py` |
+| Daily 4 AM | `build-search-index.py` |
 | Sun 1 AM | `build-listing-cma.py --all` |
 | Tue & Fri 3 AM | `build-agents.py --all` (~17 min) |
-| Mon–Sat 9:30 AM | `build-rate-profiles.py --all` |
+| Mon–Sat 9:30 AM | `build-rate-profile.py --all` |
 | **Tue + Fri 1:30 AM** | `build-seasonal-rates` → `build-closed-seasonal-rates` |
 | **Tue + Fri 2 AM** | `build-rent-rates` → `build-pool-premium` → `build-cashflow` → `build-inventory-profile` → `build-cashflow-profile` |
 

@@ -1,8 +1,8 @@
 # Rental Going-Rate & Cash-Flow — Frontend / MCP Integration Guide
 
 **Audience:** the Claude (or human) working on the frontend / chat repo who needs to expose rental cash-flow analysis as a **tool executor + MCP tool**, the same way the CMA endpoint is consumed.
-**Status:** backend pipelines live as of 2026-06-09. Backfill running; cron keeps it fresh.
-**Backend scripts (this VPS):** `src/scripts/cma/build-rent-rates.py` (layer 1), `src/scripts/cma/build-cashflow.py` (layer 2).
+**Status:** the backend pipelines are built and run on cron.
+**Backend scripts (this VPS):** `src/scripts/rental/build-going-rates.py` (layer 1), `src/scripts/investor/build-cashflow.py` (layer 2).
 **Companion docs:** `docs/cma/SUBDIVISION_AND_CITY_CMA.md`, `docs/cma/LISTING_CMA.md` — same precompute-then-`findOne` pattern.
 
 ---
@@ -30,8 +30,8 @@ Pair this with `cmaStats` (sale comps, already shipped) and you have buy-side + 
 
 | What | Collection | Field / shape | Built by |
 |---|---|---|---|
-| Going rate per community | `subdivisions` | `rentStats` (embedded) | `build-rent-rates.py` |
-| Going rate per ZIP (area) | `rent_rates` | whole doc, keyed by `postalCode` (unique) | `build-rent-rates.py` |
+| Going rate per community | `subdivisions` | `rentStats` (embedded) | `build-going-rates.py` |
+| Going rate per ZIP (area) | `rent_rates` | whole doc, keyed by `postalCode` (unique) | `build-going-rates.py` |
 | Cash-flow per sale listing | `unified_listings` | `cashflowStats` (embedded) | `build-cashflow.py` |
 
 - **Database:** `admin` (app data lives in `admin` — see `docs/db/current-state.md`).
@@ -269,7 +269,7 @@ db.unified_listings.createIndex(
 
 ## Freshness & fallback
 
-- **Cron:** `build-rent-rates.py` runs twice weekly; `build-cashflow.py` runs right after (see `crontab.vps`). Rents move slowly, sale inventory turns faster — the cashflow pass is the one that matters for freshness.
+- **Cron:** `build-going-rates.py` runs twice weekly; `build-cashflow.py` runs right after (see `crontab.vps`). Rents move slowly, sale inventory turns faster — the cashflow pass is the one that matters for freshness.
 - **`cashflowStats` absent** → listing added since the last run, or it's in an area with no rent signal (`rentEstimate` couldn't be formed). Render "cash-flow analysis unavailable" — do **not** invent a rent.
 - **`rentEstimate.confidence === "low"`** (came from rent-per-sqft, not bedroom-matched comps) → surface a caveat; the number is an extrapolation.
 - **`quality.confidence === "insufficient"`** on the underlying rentStats means too few rented comps — those areas won't produce a `cashflowStats` at all.
@@ -290,8 +290,8 @@ db.unified_listings.createIndex(
 
 ## Related backend docs
 
-- `src/scripts/cma/build-rent-rates.py` — going-rate builder (layer 1)
-- `src/scripts/cma/build-cashflow.py` — cash-flow scorer (layer 2)
-- `src/scripts/cma/build-rate-profiles.py` — per-listing seasonal rate extraction (complementary; powers STR/seasonal)
+- `src/scripts/rental/build-going-rates.py` — going-rate builder (layer 1)
+- `src/scripts/investor/build-cashflow.py` — cash-flow scorer (layer 2)
+- `src/scripts/rental/build-rate-profile.py` — per-listing seasonal rate extraction (complementary; powers STR/seasonal)
 - `docs/cma/SUBDIVISION_AND_CITY_CMA.md`, `docs/cma/LISTING_CMA.md` — the sale-side CMA this mirrors
-- `src/scripts/cma/README.md` — operational notes
+- `src/scripts/rental/README.md` — operational notes

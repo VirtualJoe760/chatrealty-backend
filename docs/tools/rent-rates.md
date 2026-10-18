@@ -6,7 +6,7 @@ output, so sources can be compared instead of blended.
 
 | Block | Producer | Subs | ZIPs | What it answers |
 |---|---|---:|---:|---|
-| `goingRate` + base stats | `build-rent-rates.py` | 1,101 | 919 | annual unfurnished market rent |
+| `goingRate` + base stats | `build-going-rates.py` | 1,101 | 919 | annual unfurnished market rent |
 | `seasonal` | `build-seasonal-rates.py` | 459 | 763 | peak-season **asking** rates |
 | `closedSeasonal` | `build-closed-seasonal-rates.py` | 948 | 1,015 | peak-season **achieved** rates |
 | `poolPremium` | `build-pool-premium.py` | 759 | 896 | monthly rent lift of a private pool |
@@ -142,7 +142,7 @@ are asking. `goingRate.basis` names which cohort produced the headline.
 
 ## `seasonal` — asking rates (active tiered listings)
 
-Rolls the per-listing `rateProfile` blocks (from `build-rate-profiles.py`, which
+Rolls the per-listing `rateProfile` blocks (from `build-rate-profile.py`, which
 extracts rate tiers out of `publicRemarks`) into area rates **split by bedroom**.
 
 ```ts

@@ -1,6 +1,6 @@
 # `inventoryProfile` — what is actually for sale here
 
-**Producer:** `src/scripts/cma/build-inventory-profile.py`
+**Producer:** `src/scripts/investor/build-inventory-profile.py`
 **Lives on:** `subdivisions` and `cities`, keyed by `slug`
 **Coverage:** 742 of 1,426 subdivisions · 836 of 1,047 cities *(2026-10-14)*
 **Refreshed:** Tue + Fri 2 AM (stage 4, before `build-cashflow-profile.py`)

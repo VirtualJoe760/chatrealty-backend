@@ -172,10 +172,10 @@ Reasonable. `listingId_1`, `listingKey_1` and the two compound forms are all jus
 
 | Pipeline | Writes to | Driven by |
 |---|---|---|
-| Unified MLS sync | `unified_listings`, `unified_closed_listings`, `unified_in_escrow`, `unified_off_market` | `src/scripts/mls/backend/unified/` (Python, run on this VPS via `run-pipeline.py`) |
+| Unified MLS sync | `unified_listings`, `unified_closed_listings`, `unified_in_escrow`, `unified_off_market` | `src/scripts/ingest/` (Python, run on this VPS via `run-pipeline.py`) |
 | Legacy per-MLS sync | `listings`, `crmls_listings`, `crmlsClosedListings`, `gpsClosedListings`, `photos` | **Unknown** — these are written today but the only cron on this VPS is FUB lead sync. Likely a Node/Next.js process running elsewhere, or `archive/` scripts that are still cron-scheduled somewhere we haven't audited. |
 | FUB lead sync | `contacts`, `fub_sync_state` | `src/scripts/fub/sync-fub-leads.py` (every 15 min via this VPS's crontab) |
-| CMA builder | `subdivisions` (writes `cmaStats`), reads `unified_listings`, `unified_closed_listings` | `src/scripts/cma/build-subdivision-cma.py` |
+| CMA builder | `subdivisions` (writes `cmaStats`), reads `unified_listings`, `unified_closed_listings` | `src/scripts/comps/build-subdivision-cma.py` |
 | Web app | `users`, `contacts`, `campaigns`, `articles`, etc. | Next.js application (separate deploy — not in this repo) |
 
 > **Important to track down:** what is still writing to `crmls_listings` / `crmlsClosedListings` / `gpsClosedListings` / `listings` / `photos` today? Until that's identified, deleting these collections is unsafe. See `cleanup-and-migration.md` step 1.
@@ -196,8 +196,8 @@ CRM record. Fields include MLS-derived property data (`assessedValue`, `bedrooms
 ### `unified_listings` (81K docs)
 Full Spark MLS RESO field set, flattened to camelCase. Notable: `coordinates` (GeoJSON), `slug`, `slugAddress`, `mlsSource`, `mlsId`, `listingKey`, `listingId`, `lastSparkRefreshAt`, `statusLastChecked`, `lastSparkMissAt` (used by `update-status.py` to detect stale listings).
 
-### `unified_closed_listings` (1.5M docs)
-Same shape as `unified_listings` plus closed-only fields: `closeDate`, `closePrice`. The 5-year TTL index `closeDate_ttl_5years` does **not** actually have `expireAfterSeconds` set in the listing — it's just a regular ascending index. (Confirm: if a TTL was intended, it never took effect — the collection has 1.5M docs going back as far as MLS history allows.)
+### `unified_closed_listings` (1,113,088 docs)
+Same shape as `unified_listings` plus closed-only fields: `closeDate`, `closePrice`. `closeDate_ttl_5years` **is** a real TTL index (`expireAfterSeconds: 157680000`) and it is actively expiring: the oldest date-typed `closeDate` is exactly 5 years back. It cannot expire the 84,903 string-typed `closeDate` values, which reach back to 2020-08-28 — see [vps-migration-plan.md](vps-migration-plan.md) §5.
 
 ### `subdivisions` (1,426 docs)
 Heavy nested doc with `cmaStats.{active, closed, bySubType, sampleWindow, subdivisionProfile, topActiveComps, topClosedComps, trends, quality}` — output of `build-subdivision-cma.py`. Per-subdivision CMA cache.
