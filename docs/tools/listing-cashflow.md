@@ -158,12 +158,16 @@ interface CashflowStats {
   };
 
   assumptions: {
-    mortgageRate: number;              // 0.074 = 7.4%, live from Freddie Mac PMMS
+    baseRate: number;                  // 0.074 — Freddie Mac frm_30, OWNER-OCCUPIED
+    investorRateSpread: number;        // 0.0075 — investor premium, stored, variable
+    mortgageRate: number;              // 0.0815 — baseRate + spread. Use THIS one
     loanTermYears; propertyTaxRate; insuranceRate;
     vacancyPct; managementPct; maintenancePct; closingCostPct;
     downScenarios: number[];           // [0.20, 0.25]
-    rateSource: "live" | "cached" | "default";
-    note: string;
+    rateSource: "live" | "fallback" | "manual";
+    spreadSource: "stored" | "default" | "default-seeded" | "manual"
+                | "dropped-out-of-range";
+    note: string;                      // includes the estimate disclaimer — display it
   };
 }
 
@@ -194,6 +198,23 @@ interface Strategy {
   note?: string;
 }
 ```
+
+
+### The rate is two numbers
+
+`baseRate` is Freddie Mac's `frm_30`, which is an **owner-occupied** rate.
+`investorRateSpread` is the investment-property premium added on top, and
+`mortgageRate` is the sum — the rate every figure in this block was actually
+computed at. **Read `mortgageRate`; never add the spread yourself.**
+
+The spread is deliberately a stored value, not a constant, because it is a
+lender-pricing assumption that moves. It lives in `system_config` under
+`_id: "investor_rate_spread"` and is changed with
+`utilities/set-investor-spread.py <percent>`, taking effect on the next build.
+`spreadSource` tells you where the value came from.
+
+Everything here is an estimate. `note` carries that disclaimer in full, and it
+is there so a surface cannot show these numbers without it.
 
 ## Rent estimation fallback
 

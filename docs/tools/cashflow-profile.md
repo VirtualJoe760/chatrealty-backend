@@ -80,10 +80,12 @@ interface CashflowProfile {
   };
 
   economics: {
-    mortgageRatePct: number;        // live rate used for this build
+    mortgageRatePct: number;        // effective investor rate for this build
+                                    // (frm_30 + investorRateSpread)
     rateAsOf: string;
     assumptions: { propertyTaxRate; insuranceRate; vacancyPct; managementPct;
-                   maintenancePct; closingCostPct; loanTermYears; rateSource };
+                   maintenancePct; closingCostPct; loanTermYears;
+                   baseRate; investorRateSpread; rateSource; spreadSource };
     longTerm:       StrategyMedians | null;
     seasonal:       StrategyMedians | null;
     closedSeasonal: StrategyMedians | null;

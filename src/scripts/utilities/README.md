@@ -13,13 +13,19 @@ utilities/
 ├── fetch_one.py, test_fetch.py     single-listing Spark fetch probes
 ├── export-photos-collection.py     spent: exported the retired photo store
 ├── migrate-photos-to-media.py      spent: moved that store into media[]
-└── normalize-close-dates.py        spent: made closeDate a single BSON type
+├── normalize-close-dates.py        spent: made closeDate a single BSON type
+└── set-investor-spread.py          read/set the investor rate premium
 ```
 
 `normalize-close-dates.py` is the exception to "spent": it is dry-run by
 default and reports the collection's `closeDate` type mix, so it doubles as the
 check that no writer has reintroduced a string. `ingest/closedate.py` holds the
 rule it enforces.
+
+`set-investor-spread.py` is not spent either — it is how the investor-property
+rate premium over `frm_30` gets changed, since that is a lender-pricing
+assumption and lives in `system_config` rather than in code. Its argument is in
+percentage points, so `0.75` means 0.75%.
 
 **Read a script before running it.** Only `purge-stale.py` is safety-guarded;
 the rest are unguarded, most have no docstring, and several are one-shots whose

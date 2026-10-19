@@ -22,7 +22,7 @@ src/scripts/
 ├── historical/  4  five years of closed sales
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  12  hand-run tools and spent one-shots
+└── utilities/  13  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is how each one
@@ -98,12 +98,21 @@ Short-term is reported as unavailable with a reason rather than guessed.
 There is no separate mortgage calculator. All of it is in
 `investor/build-cashflow.py`:
 
-- **`fetch_current_mortgage_rate()`** — the live rate. Pulls the Freddie Mac
-  30-year fixed (`frm_30`) from API Ninjas once per run, rejects anything
+- **`fetch_current_mortgage_rate()`** — the live base rate. Pulls the Freddie
+  Mac 30-year fixed (`frm_30`) from API Ninjas once per run, rejects anything
   outside 2-20%, and caches it to `system_config` under `_id:
   "mortgage_rate"`. On any failure it falls back to the last stored live rate,
   then to a 7% default, and records which in `assumptions.rateSource`. A
   rate-fetch failure never aborts a build.
+- **`load_investor_spread()`** — the investor premium. `frm_30` is an
+  owner-occupied rate, so an investment loan prices above it. How far above is
+  a lender-pricing assumption that moves, so it is a stored value rather than a
+  constant: `system_config` under `_id: "investor_rate_spread"`, changed with
+  `utilities/set-investor-spread.py <percent>` and effective on the next run.
+  Precedence is `--spread`, then the stored value, then 0.75%. The effective
+  rate is `baseRate + investorRateSpread`, and if the sum leaves the 2-20%
+  guardrail the spread is dropped rather than the build failing. All three
+  numbers are recorded in `assumptions`.
 - **`monthly_pi()`** — standard amortized monthly principal and interest.
 - **`loan_from_pi()`** — the inverse: the largest loan whose payment is a given
   figure.
@@ -178,6 +187,9 @@ not carry. Served by `src/mcp/agents_server.py`.
   `unified_closed_listings.closeDate` single-typed. Dry-run by default; takes
   `--apply`. Re-running it is the check that no writer has regressed, because
   `ingest/closedate.py` now normalizes the field on every write.
+- **`utilities/set-investor-spread.py`** — reads or sets the investor-property
+  rate premium over `frm_30`. Argument is in percentage points (`0.75` means
+  0.75%). No argument prints the current value and the last known base rate.
 - **`archive/mls/backend/`** — the retired per-MLS pipeline. Superseded by
   `unified/`; kept for reference, not runnable as-is.
 

@@ -119,7 +119,7 @@ src/scripts/
 ├── historical/  4  five years of closed sales
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  12  hand-run tools and spent one-shots
+└── utilities/  13  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is what lets

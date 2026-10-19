@@ -94,6 +94,7 @@ if not MONGO_URI:
 # documented, overridable baseline so the numbers are reproducible.
 DEFAULTS = {
     "mortgageRate": 0.07,        # annual, 30-yr fixed investment loan
+    "investorRateSpread": 0.0075,  # added to frm_30; see load_investor_spread
     "loanTermYears": 30,
     "propertyTaxRate": 0.0125,   # CA effective; Riverside ~1.25% (excl. Mello-Roos)
     "insuranceRate": 0.004,      # annual, as fraction of price
@@ -151,6 +152,11 @@ RATE_NOTE = {
     "fallback": "Mortgage rate is a fallback (API Ninjas unavailable; last-stored live rate or default).",
     "manual": "Mortgage rate set manually via --rate.",
 }
+
+SPREAD_NOTE = ("frm_30 is an owner-occupied rate, so an investor-property spread is "
+               "added on top. Every figure here is an estimate: the spread is a "
+               "lender-pricing assumption, not a quote, and state and local fees "
+               "are not modeled.")
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 db = client.get_database()
@@ -248,6 +254,55 @@ def fetch_current_mortgage_rate(default_rate):
         return rate, "live"
     except Exception as e:
         return _fallback_rate(default_rate, f"{type(e).__name__}: {e}")
+
+
+SPREAD_KEY = "investor_rate_spread"
+SPREAD_MIN, SPREAD_MAX = 0.0, 0.05   # 0–5 points; beyond that it is a typo
+
+
+def load_investor_spread(default_spread, override=None):
+    """Return (spread_decimal, source) for the investor-property rate premium.
+
+    `frm_30` is the Freddie Mac owner-occupied 30-yr fixed. An investment-property
+    loan prices above it, and by how much is a lender-pricing assumption that
+    moves — so it is a stored value, not a constant. Change it without a deploy:
+
+        system_config.updateOne({_id: "investor_rate_spread"},
+                                {$set: {spread: 0.01}})
+
+    or `utilities/set-investor-spread.py 1.0`. Precedence is --spread, then the
+    stored value, then the default. Never raises: a config problem must not
+    abort the build.
+    """
+    if override is not None:
+        print(f"📈 investor spread: +{override*100:.2f}% (manual --spread override)")
+        return override, "manual"
+    try:
+        doc = system_config_coll.find_one({"_id": SPREAD_KEY})
+        if doc is not None:
+            v = doc.get("spread")
+            if isinstance(v, (int, float)) and SPREAD_MIN <= v <= SPREAD_MAX:
+                print(f"📈 investor spread: +{v*100:.2f}% (stored, system_config)")
+                return float(v), "stored"
+            print(f"⚠️  investor spread: stored value {v!r} is not in "
+                  f"[{SPREAD_MIN}, {SPREAD_MAX}] — using default")
+        else:
+            # Seed it so the value is discoverable and editable in the DB.
+            system_config_coll.update_one(
+                {"_id": SPREAD_KEY},
+                {"$set": {"spread": default_spread,
+                          "note": "Investor-property rate premium over frm_30. "
+                                  "Edit this field to change it; no deploy needed.",
+                          "seededAt": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+            print(f"📈 investor spread: +{default_spread*100:.2f}% "
+                  f"(default, seeded into system_config)")
+            return default_spread, "default-seeded"
+    except Exception as e:
+        print(f"⚠️  investor spread: {type(e).__name__} reading config — using default")
+    print(f"📈 investor spread: +{default_spread*100:.2f}% (default)")
+    return default_spread, "default"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -693,7 +748,11 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
     # assumption overrides
-    p.add_argument("--rate", type=float, help="Mortgage rate (e.g. 0.0675).")
+    p.add_argument("--rate", type=float,
+                   help="Base mortgage rate before the investor spread (e.g. 0.0675).")
+    p.add_argument("--spread", type=float,
+                   help="Investor-property rate premium over the base rate "
+                        "(e.g. 0.0075). Default is the stored system_config value.")
     p.add_argument("--tax-rate", type=float)
     p.add_argument("--vacancy", type=float)
     p.add_argument("--management", type=float)
@@ -705,15 +764,33 @@ def main():
         sys.exit(1)
 
     a = dict(DEFAULTS)
-    # Mortgage rate priority: --rate override > live fetch > fallback (last-stored/default).
+    # Base rate priority: --rate override > live fetch > fallback (last-stored/default).
     if args.rate is not None:
-        a["mortgageRate"] = args.rate
+        base_rate = args.rate
         rate_source = "manual"
-        print(f"🏦 mortgage rate: {args.rate*100:.2f}% (manual --rate override)")
+        print(f"🏦 base rate: {base_rate*100:.2f}% (manual --rate override)")
     else:
-        a["mortgageRate"], rate_source = fetch_current_mortgage_rate(DEFAULTS["mortgageRate"])
+        base_rate, rate_source = fetch_current_mortgage_rate(DEFAULTS["mortgageRate"])
+
+    # frm_30 is owner-occupied; an investment loan prices above it.
+    spread, spread_source = load_investor_spread(
+        DEFAULTS["investorRateSpread"], override=args.spread)
+
+    effective = base_rate + spread
+    if not (RATE_MIN <= effective <= RATE_MAX):
+        print(f"⚠️  base {base_rate*100:.2f}% + spread {spread*100:.2f}% = "
+              f"{effective*100:.2f}% is outside [{RATE_MIN*100:.0f}%, "
+              f"{RATE_MAX*100:.0f}%] — dropping the spread")
+        effective, spread, spread_source = base_rate, 0.0, "dropped-out-of-range"
+
+    a["baseRate"] = round(base_rate, 6)
+    a["investorRateSpread"] = round(spread, 6)
+    a["mortgageRate"] = round(effective, 6)
     a["rateSource"] = rate_source
-    a["note"] = LEASE_NOTE + " " + RATE_NOTE[rate_source]
+    a["spreadSource"] = spread_source
+    a["note"] = LEASE_NOTE + " " + RATE_NOTE[rate_source] + " " + SPREAD_NOTE
+    print(f"🏦 effective investor rate: {effective*100:.2f}% "
+          f"(base {base_rate*100:.2f}% + {spread*100:.2f}%)")
 
     if args.tax_rate is not None:
         a["propertyTaxRate"] = args.tax_rate
