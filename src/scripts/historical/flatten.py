@@ -11,13 +11,13 @@ Flattens closed listings from fetch.py output to camelCase format with:
 
 Usage:
     # Flatten most recent closed listings file
-    python src/scripts/mls/backend/unified/closed/flatten.py
+    python src/scripts/historical/flatten.py
 
     # Flatten specific file
-    python src/scripts/mls/backend/unified/closed/flatten.py --input local-logs/closed/closed_5y_GPS_listings.json
+    python src/scripts/historical/flatten.py --input local-logs/closed/closed_5y_GPS_listings.json
 
     # Process all closed listings files
-    python src/scripts/mls/backend/unified/closed/flatten.py --all
+    python src/scripts/historical/flatten.py --all
 
 Input: local-logs/closed/closed_5y_{MLS}_listings.json (from fetch.py)
 Output: local-logs/closed/flattened_closed_{MLS}_listings.json

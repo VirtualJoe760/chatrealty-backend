@@ -108,11 +108,11 @@ carries a real TTL index — `closeDate_ttl_5years`, `expireAfterSeconds:
 157_680_000` — so older closed listings are deleted. Career history beyond 5
 years cannot be recovered, and `windowDeals` is not a lifetime count.
 
-`closeDate` is **mixed BSON types**, which silently halves any naive window
-filter in either direction. This builder filters on a `$convert`-ed value and
-clamps the future to drop corrupt rows; any other closed-listing reader must do
-the same. The measurements, the affected lines in the CMA builders and the
-recommended one-off normalization are in
+`closeDate` is **BSON date throughout** — query it with a `datetime`, never an
+ISO string, which matches nothing. It was once mixed date + string, which
+silently halved any naive window filter; `src/scripts/ingest/closedate.py` now
+normalizes it on every write. This builder still filters on a `$convert`-ed
+value, which is defensive rather than required. History in
 [../db/vps-migration-plan.md](../db/vps-migration-plan.md) §5.
 
 ---

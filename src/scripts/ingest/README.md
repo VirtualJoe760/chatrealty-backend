@@ -25,26 +25,25 @@ The status router in `seed.py` places each fresh doc in the correct collection a
 ## Directory layout
 
 ```
-unified/
+ingest/
 ├── README.md                    ← you are here
-├── unified-fetch.py             ← Spark Replication API fetch (on-market statuses)
+├── fetch.py                     ← Spark Replication API fetch (on-market statuses)
 ├── flatten.py                   ← Raw → camelCase flatten + Media preservation
 ├── seed.py                      ← Status-router: upserts into correct lifecycle collection
 ├── run-pipeline.py              ← ENTRY POINT. Orchestrator: fetch → flatten → seed
 ├── update-status.py             ← Batched full-data refresher + cross-collection router
+├── infer-listing-status.py      ← Status inference for docs Spark stops returning
+├── closedate.py                 ← The one rule for a usable closeDate (imported, not run)
 ├── fetch-photos.py              ← Per-listing /photos → media[] inline (all 3 on-market collections)
-├── verify-db.py                 ← Read-only sanity check (counts, statuses, indexes)
-└── closed/
-    ├── README.md
-    ├── fetch.py                 ← Closed-sales fetch (5-year rolling)
-    ├── flatten.py
-    └── seed.py                  ← Seeds directly into unified_closed_listings
+└── verify-db.py                 ← Read-only sanity check (counts, statuses, indexes)
 ```
+
+The closed-sales backfill moved out of here to `src/scripts/historical/`.
 
 ### Entry point
 
 **`run-pipeline.py` is the entry point.** Run the pipeline through it, not by
-calling `unified-fetch.py` / `flatten.py` / `seed.py` by hand — it passes the
+calling `fetch.py` / `flatten.py` / `seed.py` by hand — it passes the
 `--input`/`--output` paths between stages, and stage scripts invoked directly
 fall back to defaults that do not always match (the bug that made the closed
 sync fail 146 consecutive runs).
@@ -78,7 +77,7 @@ Two entries are commented-out in `crontab.vps` until their scripts are rebuilt:
 
 ## Scripts — what they do
 
-### `unified-fetch.py`
+### `ingest/fetch.py`
 Pulls listings from Spark for one or more MLSs.
 
 - **Default status filter** covers the full on-market lifecycle so the router places them correctly: `Active, ComingSoon, Pending, Active Under Contract, Hold`.
@@ -88,10 +87,10 @@ Pulls listings from Spark for one or more MLSs.
 
 ```bash
 # Daily incremental (cron does this)
-python3 unified-fetch.py --mls GPS --incremental
+python3 ingest/fetch.py --mls GPS --incremental
 
 # One-off 7-day window
-python3 unified-fetch.py --mls CRMLS --incremental --hours 168
+python3 ingest/fetch.py --mls CRMLS --incremental --hours 168
 ```
 
 ### `flatten.py`

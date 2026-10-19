@@ -2,7 +2,7 @@
 """
 Unified MLS Flatten Script
 
-Flattens listings from unified-fetch.py output to camelCase format with:
+Flattens listings from ingest/fetch.py output to camelCase format with:
 - MLS source tracking (mlsSource, mlsId)
 - PropertyType name mapping (propertyTypeName)
 - Media array preservation (from _expand=Media)
@@ -11,9 +11,9 @@ Flattens listings from unified-fetch.py output to camelCase format with:
 - Null/empty/masked field removal
 
 Usage:
-    python src/scripts/mls/backend/unified/flatten.py
+    python src/scripts/ingest/flatten.py
 
-Input: local-logs/all_{MLS}_listings.json (from unified-fetch.py)
+Input: local-logs/all_{MLS}_listings.json (from ingest/fetch.py)
 Output: local-logs/flattened_unified_{MLS}_listings.json
 """
 
@@ -286,7 +286,7 @@ def main():
             reverse=True,
         )
         if not candidates:
-            raise Exception("No input files found in local-logs. Run unified-fetch.py first.")
+            raise Exception("No input files found in local-logs. Run ingest/fetch.py first.")
         input_path = candidates[0]
 
     # Auto-generate output file if not specified.

@@ -23,16 +23,16 @@ Runtime target: ~30 min/day for ~122k on-market docs at ~3 req/sec.
 
 Usage:
     # Routine daily run (7am cron)
-    python3 src/scripts/mls/backend/unified/update-status.py
+    python3 src/scripts/ingest/update-status.py
 
     # Restrict to one source collection
-    python3 src/scripts/mls/backend/unified/update-status.py --source unified_in_escrow
+    python3 src/scripts/ingest/update-status.py --source unified_in_escrow
 
     # Restrict to one MLS (testing)
-    python3 src/scripts/mls/backend/unified/update-status.py --mls ITECH
+    python3 src/scripts/ingest/update-status.py --mls ITECH
 
     # Dry-run: show what would change, no DB writes
-    python3 src/scripts/mls/backend/unified/update-status.py --dry-run
+    python3 src/scripts/ingest/update-status.py --dry-run
 """
 
 import os
@@ -51,6 +51,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flatten import flatten_listing  # noqa: E402
 from seed import STATUS_ROUTES, ALL_LIFECYCLE_COLLECTIONS, route_status  # noqa: E402
+from closedate import coerce_close_date  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 🔧 ENV & CONFIG
@@ -71,7 +72,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-# Must mirror unified-fetch.py / flatten.py
+# Must mirror ingest/fetch.py / flatten.py
 MLS_IDS = {
     "GPS": "20190211172710340762000000",
     "CRMLS": "20200218121507636729000000",
@@ -155,6 +156,26 @@ def fetch_batch(mls_name: str, mls_id: str, keys: list[str]) -> list[dict]:
     return []
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 📅 closeDate
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _set_close_date(doc: dict) -> None:
+    """Normalize doc["closeDate"] in place to a datetime, dropping bad values.
+
+    Spark sends "YYYY-MM-DD". Writing that through unchanged is what made
+    unified_closed_listings mixed-BSON-type; the rule lives in closedate.py.
+    """
+    if "closeDate" not in doc:
+        return
+    coerced = coerce_close_date(doc.get("closeDate"))
+    if coerced is None:
+        doc.pop("closeDate", None)
+    else:
+        doc["closeDate"] = coerced
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 🧹 LEGACY STUCK-CLOSED SWEEP (kept from prior version)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -186,6 +207,7 @@ def sweep_stuck_closed(db, dry_run: bool = False) -> dict:
             doc.pop("_id", None)
             doc["statusLastChecked"] = now_iso
             doc["movedToClosedAt"] = now_iso
+            _set_close_date(doc)
             try:
                 closed_coll.update_one(
                     {"listingKey": key},
@@ -227,6 +249,7 @@ def _apply_update(db, listing_key: str, flat: dict, source: str,
 
     if target == "unified_closed_listings":
         flat["movedToClosedAt"] = flat.get("movedToClosedAt") or now_iso
+    _set_close_date(flat)
 
     if dry_run:
         return "move" if source != target else "refresh"

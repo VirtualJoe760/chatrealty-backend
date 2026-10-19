@@ -15,25 +15,26 @@ Features:
 
 Usage:
     # Seed all MLS files at once
-    python src/scripts/mls/backend/unified/closed/seed.py --all
+    python src/scripts/historical/seed.py --all
 
     # Seed all except certain MLSs
-    python src/scripts/mls/backend/unified/closed/seed.py --all --exclude GPS CRMLS
+    python src/scripts/historical/seed.py --all --exclude GPS CRMLS
 
     # Seed from auto-detected file (most recent)
-    python src/scripts/mls/backend/unified/closed/seed.py
+    python src/scripts/historical/seed.py
 
     # Seed from specific file
-    python src/scripts/mls/backend/unified/closed/seed.py --input local-logs/closed/flattened_closed_GPS_listings.json
+    python src/scripts/historical/seed.py --input local-logs/closed/flattened_closed_GPS_listings.json
 
     # Recreate indexes only
-    python src/scripts/mls/backend/unified/closed/seed.py --indexes-only
+    python src/scripts/historical/seed.py --indexes-only
 """
 
 import os
 import json
 import time
 import argparse
+import sys
 from pathlib import Path
 from datetime import datetime
 from pymongo import MongoClient, UpdateOne, GEOSPHERE, ASCENDING, DESCENDING
@@ -43,6 +44,11 @@ from dotenv import load_dotenv
 # Load environment variables
 env_path = Path(__file__).resolve().parents[3] / ".env.local"
 load_dotenv(dotenv_path=env_path)
+
+# closeDate reaches this collection from here and from ingest/, and the rule for
+# what counts as a usable value lives in one place so the two cannot drift.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ingest"))
+from closedate import coerce_close_date  # noqa: E402
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
@@ -58,19 +64,15 @@ def parse_date(date_str):
     """
     Convert date string to datetime object for MongoDB.
     Handles formats: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, etc.
-    """
-    if not date_str or isinstance(date_str, datetime):
-        return date_str
 
-    try:
-        # Try ISO format first (YYYY-MM-DDTHH:MM:SSZ)
-        if 'T' in str(date_str):
-            return datetime.fromisoformat(str(date_str).replace('Z', '+00:00'))
-        # Try simple date format (YYYY-MM-DD)
-        return datetime.strptime(str(date_str), '%Y-%m-%d')
-    except Exception as e:
-        print(f"[WARN] Could not parse date '{date_str}': {e}")
-        return None
+    Returns None for unparseable values and for implausible far-future dates —
+    the feed really does send years like 4008, and a date-typed one of those
+    poisons every most-recent-sale sort. Callers already skip None.
+    """
+    parsed = coerce_close_date(date_str)
+    if parsed is None and date_str:
+        print(f"[WARN] Unusable date '{date_str}'")
+    return parsed
 
 
 def connect_to_mongodb(retries=3):

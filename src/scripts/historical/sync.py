@@ -18,16 +18,16 @@ Crontab (0 10 * * *) schedules this after the 6am/7am pipeline + status jobs.
 
 Usage:
     # Full daily run — last 30 days of closings across all MLSs
-    python3 src/scripts/mls/backend/historical_closed_sync.py
+    python3 src/scripts/historical/sync.py
 
     # Narrower window
-    python3 src/scripts/mls/backend/historical_closed_sync.py --window-days 7
+    python3 src/scripts/historical/sync.py --window-days 7
 
     # One MLS only
-    python3 src/scripts/mls/backend/historical_closed_sync.py --mls GPS
+    python3 src/scripts/historical/sync.py --mls GPS
 
     # Skip a slow MLS
-    python3 src/scripts/mls/backend/historical_closed_sync.py --exclude CRMLS
+    python3 src/scripts/historical/sync.py --exclude CRMLS
 """
 
 import sys

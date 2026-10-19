@@ -3,23 +3,23 @@
 Unified MLS Pipeline Runner
 
 Orchestrates the complete data pipeline:
-1. Fetch listings from Spark API (unified-fetch.py)
+1. Fetch listings from Spark API (ingest/fetch.py)
 2. Flatten to camelCase with enhanced fields (flatten.py)
 3. Seed to MongoDB unified_listings collection (seed.py)
 
 Usage:
     # Run full pipeline for GPS MLS
-    python src/scripts/mls/backend/unified/run-pipeline.py --mls GPS
+    python src/scripts/ingest/run-pipeline.py --mls GPS
 
     # Run full pipeline for all 8 MLSs
-    python src/scripts/mls/backend/unified/run-pipeline.py --all
+    python src/scripts/ingest/run-pipeline.py --all
 
     # Run only specific steps
-    python src/scripts/mls/backend/unified/run-pipeline.py --mls GPS --steps fetch,flatten
-    python src/scripts/mls/backend/unified/run-pipeline.py --mls GPS --steps seed
+    python src/scripts/ingest/run-pipeline.py --mls GPS --steps fetch,flatten
+    python src/scripts/ingest/run-pipeline.py --mls GPS --steps seed
 
     # Incremental update (fetch only recent changes)
-    python src/scripts/mls/backend/unified/run-pipeline.py --all --incremental
+    python src/scripts/ingest/run-pipeline.py --all --incremental
 """
 
 import subprocess

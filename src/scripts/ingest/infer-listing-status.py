@@ -41,9 +41,9 @@ Coverage of the first field is not guaranteed across all 8 MLSs, and a doc with
 no usable timestamp is left "unknown" rather than aged from nothing.
 
 Usage:
-    python3 src/scripts/mls/backend/unified/infer-listing-status.py --dry-run
-    python3 src/scripts/mls/backend/unified/infer-listing-status.py --all
-    python3 src/scripts/mls/backend/unified/infer-listing-status.py --all --grace-days 45
+    python3 src/scripts/ingest/infer-listing-status.py --dry-run
+    python3 src/scripts/ingest/infer-listing-status.py --all
+    python3 src/scripts/ingest/infer-listing-status.py --all --grace-days 45
 """
 
 from __future__ import annotations

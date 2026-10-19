@@ -531,7 +531,10 @@ def _build_query(level: int, subject: dict, status: str, params: dict) -> dict |
     if status == "active":
         base["standardStatus"] = {"$in": ACTIVE_STATUSES}
     else:
-        base["closeDate"] = {"$gte": _date_floor(months).isoformat()}
+        # A datetime, not .isoformat(): closeDate is BSON date everywhere
+        # (enforced on write by ingest/closedate.py), and BSON never compares a
+        # string against a date, so a string bound here would match nothing.
+        base["closeDate"] = {"$gte": _date_floor(months)}
 
     # Most listings carry sqft; if not, skip the constraint to avoid zero-result queries.
     if sqft and sqft > 0:

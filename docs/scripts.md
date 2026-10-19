@@ -18,11 +18,11 @@ src/scripts/
 ├── rental/      6  what things rent for
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
-├── ingest/      8  live MLS feed -> unified_*
+├── ingest/      9  live MLS feed -> unified_*
 ├── historical/  4  five years of closed sales
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  11  hand-run tools and spent one-shots
+└── utilities/  12  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is how each one
@@ -174,6 +174,10 @@ not carry. Served by `src/mcp/agents_server.py`.
   mostly undocumented, so read one before running it.
 - **`utilities/export-photos-collection.py`** and
   **`migrate-photos-to-media.py`** — spent one-shots from the photo migration.
+- **`utilities/normalize-close-dates.py`** — spent one-shot that made
+  `unified_closed_listings.closeDate` single-typed. Dry-run by default; takes
+  `--apply`. Re-running it is the check that no writer has regressed, because
+  `ingest/closedate.py` now normalizes the field on every write.
 - **`archive/mls/backend/`** — the retired per-MLS pipeline. Superseded by
   `unified/`; kept for reference, not runnable as-is.
 

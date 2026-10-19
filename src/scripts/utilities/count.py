@@ -1,4 +1,4 @@
-# src/scripts/mls/backend/count_target.py
+# src/scripts/utilities/count.py
 
 import os
 import requests

@@ -87,7 +87,7 @@ if not ACCESS_TOKEN:
 BASE_URL = "https://replication.sparkapi.com/v1/accounts"
 ROSTER = "agent_roster"
 
-# Same ids as src/scripts/mls/backend/unified/unified-fetch.py. Kept in step
+# Same ids as src/scripts/ingest/fetch.py. Kept in step
 # with that file by hand; if an MLS is added there, add it here too.
 MLS_IDS = {
     "GPS": "20190211172710340762000000",
@@ -309,7 +309,7 @@ def fetch_mls(mls_source: str, mls_id: str, *, page_cap=None, verbose=False):
             print(f"    page {page:>4}  +{len(batch):<4} = {seen:>7,}"
                   f"{f' / {total:,}' if total else ''}", flush=True)
 
-        # Same end conditions as unified-fetch.py: no token, or an unchanged one.
+        # Same end conditions as ingest/fetch.py: no token, or an unchanged one.
         if not new_token or new_token == skiptoken:
             return
         if page_cap and page >= page_cap:

@@ -1,4 +1,4 @@
-# src/scripts/mls/backend/fetch_one.py
+# src/scripts/utilities/fetch_one.py
 
 import os
 import json

@@ -197,7 +197,7 @@ CRM record. Fields include MLS-derived property data (`assessedValue`, `bedrooms
 Full Spark MLS RESO field set, flattened to camelCase. Notable: `coordinates` (GeoJSON), `slug`, `slugAddress`, `mlsSource`, `mlsId`, `listingKey`, `listingId`, `lastSparkRefreshAt`, `statusLastChecked`, `lastSparkMissAt` (used by `update-status.py` to detect stale listings).
 
 ### `unified_closed_listings` (1,113,088 docs)
-Same shape as `unified_listings` plus closed-only fields: `closeDate`, `closePrice`. `closeDate_ttl_5years` **is** a real TTL index (`expireAfterSeconds: 157680000`) and it is actively expiring: the oldest date-typed `closeDate` is exactly 5 years back. It cannot expire the 84,903 string-typed `closeDate` values, which reach back to 2020-08-28 — see [vps-migration-plan.md](vps-migration-plan.md) §5.
+Same shape as `unified_listings` plus closed-only fields: `closeDate`, `closePrice`. `closeDate_ttl_5years` **is** a real TTL index (`expireAfterSeconds: 157680000`) and it is actively expiring: the oldest `closeDate` is exactly 5 years back. `closeDate` is BSON date throughout — query it with a `datetime`, never an ISO string, which matches nothing. 38 documents have no `closeDate` and so are exempt from the TTL: 4 that never had one plus 34 whose implausible value was parked in `closeDateCorrupt`. See [vps-migration-plan.md](vps-migration-plan.md) §5.
 
 ### `subdivisions` (1,426 docs)
 Heavy nested doc with `cmaStats.{active, closed, bySubType, sampleWindow, subdivisionProfile, topActiveComps, topClosedComps, trends, quality}` — output of `build-subdivision-cma.py`. Per-subdivision CMA cache.

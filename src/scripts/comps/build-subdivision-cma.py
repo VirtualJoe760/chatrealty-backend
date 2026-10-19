@@ -79,7 +79,8 @@ print("✅ Connected to MongoDB")
 
 
 def coerce_date(v):
-    """closeDate is mixed datetime / str in the collection — normalize to datetime."""
+    """Normalize closeDate to datetime. Defensive: the field is BSON date
+    everywhere since ingest/closedate.py, but this also absorbs the str form."""
     if v is None:
         return None
     if isinstance(v, datetime):

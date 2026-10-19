@@ -14,13 +14,13 @@ Features:
 
 Usage:
     # Fetch all active listings from all MLSs
-    python src/scripts/mls/backend/unified-fetch.py
+    python src/scripts/ingest/fetch.py
 
     # Fetch from specific MLS
-    python src/scripts/mls/backend/unified-fetch.py --mls GPS
+    python src/scripts/ingest/fetch.py --mls GPS
 
     # Incremental update (last hour only)
-    python src/scripts/mls/backend/unified-fetch.py --incremental
+    python src/scripts/ingest/fetch.py --incremental
 """
 
 import os

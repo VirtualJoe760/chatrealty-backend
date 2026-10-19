@@ -3,7 +3,7 @@
 Unified MLS Fetch Script - CLOSED LISTINGS (Past 5 Years)
 
 Fetches closed/sold listings from all 8 MLS associations via Spark Replication API.
-Mirrors the structure of unified-fetch.py but targets StandardStatus='Closed'.
+Mirrors the structure of ingest/fetch.py but targets StandardStatus='Closed'.
 
 Data Retention: Only fetches closed listings from past 5 years.
 
@@ -16,22 +16,22 @@ Features:
 
 Usage:
     # Fetch all closed listings from past 5 years (all MLSs)
-    python src/scripts/mls/backend/unified/closed/fetch.py
+    python src/scripts/historical/fetch.py
 
     # Fetch from specific MLS
-    python src/scripts/mls/backend/unified/closed/fetch.py --mls GPS
+    python src/scripts/historical/fetch.py --mls GPS
 
     # Exclude slow MLSs (GPS, CRMLS) and fetch the rest
-    python src/scripts/mls/backend/unified/closed/fetch.py --exclude GPS CRMLS -y
+    python src/scripts/historical/fetch.py --exclude GPS CRMLS -y
 
     # Custom time range
-    python src/scripts/mls/backend/unified/closed/fetch.py --years 3
+    python src/scripts/historical/fetch.py --years 3
 
     # Auto-confirm all prompts (no interaction)
-    python src/scripts/mls/backend/unified/closed/fetch.py -y
+    python src/scripts/historical/fetch.py -y
 
     # Combine exclude and auto-confirm
-    python src/scripts/mls/backend/unified/closed/fetch.py --exclude GPS CRMLS -y --delay 1.5
+    python src/scripts/historical/fetch.py --exclude GPS CRMLS -y --delay 1.5
 """
 
 import os
@@ -54,7 +54,7 @@ ACCESS_TOKEN = os.getenv("SPARK_ACCESS_TOKEN")
 LOCAL_LOGS_DIR = Path(__file__).resolve().parents[3] / "local-logs" / "closed"
 LOCAL_LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-# MLS ID Mapping (all 8 associations - same as unified-fetch.py)
+# MLS ID Mapping (all 8 associations - same as ingest/fetch.py)
 MLS_IDS = {
     "GPS": "20190211172710340762000000",
     "CRMLS": "20200218121507636729000000",
@@ -195,7 +195,7 @@ def fetch_closed_listings(
         type_conditions = [f"PropertyType Eq '{t}'" for t in property_types]
         filter_parts.append("(" + " Or ".join(type_conditions) + ")")
 
-    # ⭐ CLOSED STATUS FILTER (key difference from unified-fetch.py)
+    # ⭐ CLOSED STATUS FILTER (key difference from ingest/fetch.py)
     filter_parts.append("StandardStatus Eq 'Closed'")
 
     # ⭐ DATE FILTER - Only fetch closed listings from past X years

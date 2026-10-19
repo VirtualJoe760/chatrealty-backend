@@ -115,11 +115,11 @@ src/scripts/
 ├── rental/      6  what things rent for
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
-├── ingest/      8  live MLS feed -> unified_*
+├── ingest/      9  live MLS feed -> unified_*
 ├── historical/  4  five years of closed sales
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  11  hand-run tools and spent one-shots
+└── utilities/  12  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is what lets

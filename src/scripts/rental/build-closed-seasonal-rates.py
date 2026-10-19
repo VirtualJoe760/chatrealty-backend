@@ -277,7 +277,8 @@ def furnished_class(value) -> str | None:
 
 
 def parse_close_date(value) -> datetime | None:
-    """closeDate is mixed BSON date / string across MLS sources."""
+    """Normalize closeDate to datetime. Defensive: the field is BSON date
+    everywhere since ingest/closedate.py, but this also absorbs the str form."""
     if isinstance(value, datetime):
         return value
     if not value:

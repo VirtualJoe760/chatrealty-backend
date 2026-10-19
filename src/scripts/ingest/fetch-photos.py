@@ -32,19 +32,19 @@ workers rate-limited hard; 1-worker was stable at ~2 req/sec. The daily
 
 Usage:
     # Small sanity test
-    python3 src/scripts/mls/backend/unified/fetch-photos.py --mls GPS --limit 10
+    python3 src/scripts/ingest/fetch-photos.py --mls GPS --limit 10
 
     # Full backfill across all MLSs (several hours)
-    python3 src/scripts/mls/backend/unified/fetch-photos.py --all
+    python3 src/scripts/ingest/fetch-photos.py --all
 
     # Daily delta — re-fetch only listings modified since their photoCachedAt
-    python3 src/scripts/mls/backend/unified/fetch-photos.py --all --delta
+    python3 src/scripts/ingest/fetch-photos.py --all --delta
 
     # Re-cache a specific MLS ignoring existing photoCachedAt
-    python3 src/scripts/mls/backend/unified/fetch-photos.py --mls CRMLS --force
+    python3 src/scripts/ingest/fetch-photos.py --mls CRMLS --force
 
     # Repair: fill media[] only where it is missing entirely
-    python3 src/scripts/mls/backend/unified/fetch-photos.py --all --missing-media
+    python3 src/scripts/ingest/fetch-photos.py --all --missing-media
 """
 
 import os

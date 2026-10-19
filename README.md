@@ -10,15 +10,18 @@ sync MLS data into MongoDB and precompute the analytics the frontend + AI chat r
 
 ```
 src/scripts/
-├── mls/backend/unified/   MLS sync → unified_listings / unified_closed_listings / …
-├── agents/                build-agents.py → agents / brokerages
-└── cma/                   Analytics precompute:
-    ├── build-subdivision-cma.py   cmaStats (sale comps) per subdivision
-    ├── build-listing-cma.py       cmaStats per active sale listing
-    ├── build-rate-profile.py     per-listing seasonal rent rateProfile
-    ├── build-going-rates.py        rentStats "going rate" per subdivision + ZIP
-    └── build-cashflow.py          cashflowStats (rental investment math) per listing
+├── ingest/      live MLS feed → unified_listings / unified_closed_listings / …
+├── historical/  five years of closed sales
+├── rental/      what things rent for      (going rates, seasonal, pool premium)
+├── investor/    whether it is a good buy  (cash-flow, inventory + cash-flow rollups)
+├── comps/       what things sell for      (subdivision + per-listing CMA)
+├── agents/      agent + brokerage database
+├── search/      chat autocomplete index
+└── utilities/   hand-run tools and spent one-shots
 ```
+
+One folder per domain, one level deep. `docs/scripts.md` is the index of every
+script, what it writes and when it runs.
 
 ## Analytics layers
 

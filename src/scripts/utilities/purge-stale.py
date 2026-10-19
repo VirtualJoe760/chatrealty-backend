@@ -4,7 +4,7 @@ Purge Stale Listings (safety-guarded rewrite)
 
 For each MLS:
   1. Query Spark for every currently-accessible Active listingKey
-     (paginated, `_select=ListingKey`, same filter shape as unified-fetch.py).
+     (paginated, `_select=ListingKey`, same filter shape as ingest/fetch.py).
   2. Read every `unified_listings` doc currently marked Active for that MLS.
   3. Compute stale = DB-active keys NOT present in Spark's accessible set.
   4. Evaluate safety guards — abort the MLS if ANY guard trips:
@@ -32,16 +32,16 @@ restore-purged-listings.py for recovery.
 
 Usage:
     # Dry-run across all MLSs
-    python3 src/scripts/mls/backend/unified/purge-stale.py
+    python3 src/scripts/utilities/purge-stale.py
 
     # Dry-run one MLS
-    python3 src/scripts/mls/backend/unified/purge-stale.py --mls GPS
+    python3 src/scripts/utilities/purge-stale.py --mls GPS
 
     # Apply for real
-    python3 src/scripts/mls/backend/unified/purge-stale.py --mls GPS --apply
+    python3 src/scripts/utilities/purge-stale.py --mls GPS --apply
 
     # Tune a threshold
-    python3 src/scripts/mls/backend/unified/purge-stale.py --max-purge-ratio 0.15 --apply
+    python3 src/scripts/utilities/purge-stale.py --max-purge-ratio 0.15 --apply
 """
 
 import os

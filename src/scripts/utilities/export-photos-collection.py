@@ -19,7 +19,7 @@ filtering. Whatever is in the collection lands in the file, `_id` included,
 so a restore reproduces the collection exactly.
 
 Usage:
-    python3 src/scripts/mls/backend/unified/export-photos-collection.py \
+    python3 src/scripts/utilities/export-photos-collection.py \
         --out /root/backups/photos-YYYYMMDD.jsonl.gz
 """
 

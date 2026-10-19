@@ -33,22 +33,17 @@ California. Instead `identity.personId` clusters registrations conservatively
 `identity.alsoKnownAs` lists the sibling documents, so a tool can roll a person
 up without the model guessing. See cluster_people().
 
-── The closeDate trap ────────────────────────────────────────────────────────
-`unified_closed_listings.closeDate` is **mixed BSON types** (measured
-2026-10-14): 1,028,003 date + 84,903 string + 4 missing. Two consequences this
-builder has to handle and every other closed-listing reader should too:
+── The closeDate conversion ──────────────────────────────────────────────────
+`unified_closed_listings.closeDate` is BSON date throughout. It was once mixed
+date + string, which made a plain `{closeDate: {$gte: <datetime>}}` drop the
+string-typed half silently; `utilities/normalize-close-dates.py` converted the
+field and `ingest/seed.coerce_close_date` now normalizes it on every write.
 
-  * A plain `{closeDate: {$gte: <datetime>}}` silently drops all 84,903
-    string-typed docs, because BSON sorts strings before dates. Those strings
-    run to 2026-10-12, so they are current production, not junk.
-  * A real TTL index (`closeDate_ttl_5years`, expireAfterSeconds 157,680,000)
-    deletes date-typed docs past 5 years but **cannot touch the strings**, which
-    reach back to 2020-08-28.
-
-So the window is applied to a *converted* date (`$convert ... to date`, with
-onError null) rather than to the raw field, and the conversion failures are
-counted and reported rather than dropped quietly. The same scan also throws out
-35 corrupt future dates (the worst is closeDate year 5015).
+The window here is still applied to a *converted* date (`$convert ... to date`,
+with onError null) rather than to the raw field. That is now defensive rather
+than required: it costs this builder the `closeDate` index but it cannot
+regress if a writer ever reintroduces a string. Conversion failures are counted
+and reported rather than dropped quietly.
 
 ── Window ───────────────────────────────────────────────────────────────────
 Rolling 5 years by default (`--years`), which matches both the TTL and the
@@ -184,7 +179,9 @@ TEAM_TOKENS = ("team", "group", "partners", "realty group", "collective",
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def coerce_date(v):
-    """closeDate and friends are mixed datetime / str — normalize to datetime.
+    """Normalize closeDate and friends to datetime. closeDate itself is BSON
+    date everywhere since ingest/closedate.py; this stays for the other fields
+    and as a guard.
 
     Same contract as the helper in src/scripts/cma/build-subdivision-cma.py.
     """
@@ -1514,7 +1511,10 @@ def main():
     now = datetime.now(timezone.utc)
     build_id = now.strftime("%Y%m%dT%H%M%SZ")
     cutoff = now - timedelta(days=365 * args.years)
-    ceiling = now + timedelta(days=7)   # drops the 35 corrupt future closeDates
+    # Mirrors FUTURE_CLOSE_GRACE in ingest/seed.py, which is where the rule is
+    # enforced on write. Not 7 days: seasonal leases close months ahead of
+    # occupancy, and a 7-day ceiling dropped 7 legitimate lease closings.
+    ceiling = now + timedelta(days=183)
     limit = args.smoke_limit if args.smoke else None
 
     print(f"\n{'='*74}")

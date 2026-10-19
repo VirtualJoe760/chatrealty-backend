@@ -89,7 +89,7 @@ Empty in `admin` today, no recent writes — most are Mongoose model registratio
   - `propertyType_1` (covered by `propertyType_closeDate`)
   - `mlsSource_1` (covered by `mlsSource_closeDate`)
   - `closePrice_1` (covered by `closePrice_closeDate`)
-- ~~Reconcile the `closeDate_ttl_5years` index~~ — resolved: it is a real TTL (`expireAfterSeconds: 157680000`) and the name is accurate. It cannot expire string-typed `closeDate` values; that is the open item, tracked in [vps-migration-plan.md](vps-migration-plan.md) §5.
+- ~~Reconcile the `closeDate_ttl_5years` index~~ — resolved: it is a real TTL (`expireAfterSeconds: 157680000`) and the name is accurate. The string-typed values that used to escape it are gone; `closeDate` is BSON date throughout. See [vps-migration-plan.md](vps-migration-plan.md) §5.
 - Keep one index per compound prefix shape; drop `*_1_*_1` variants that duplicate `*_1` ascending forms.
 
 For `unified_listings` (62 indexes), pick one of the duplicate field-name pairs and stick with it:
@@ -154,7 +154,7 @@ Things that bite at scale that we should fix before opening the doors:
 - [ ] **Sharding decision recorded.** At today's size (`unified_closed_listings` is 9.7 GB, 1.5M docs, growing) we don't need sharding yet. Document the trigger threshold (e.g., 50 GB or sustained write throughput >5k ops/s) so we don't get caught flat-footed.
 - [ ] **Connection pool sizing.** Verify the Node app's `maxPoolSize` and the Python scripts' connection counts can sustain the cron schedule without blowing the cluster's connection cap. DO Managed MongoDB has a fixed limit per tier.
 - [ ] **Replica reads where appropriate.** Heavy read endpoints (map search, listing detail) should use `readPreference=secondaryPreferred` to offload the primary.
-- [x] **TTL on `unified_closed_listings`.** A 5-year TTL is set and working (`closeDate_ttl_5years`, `expireAfterSeconds: 157680000`). Remaining gap: string-typed `closeDate` values are exempt from it.
+- [x] **TTL on `unified_closed_listings`.** A 5-year TTL is set and working (`closeDate_ttl_5years`, `expireAfterSeconds: 157680000`), and the string-typed values that were exempt from it have been normalized to dates.
 - [ ] **Compound-key uniqueness on listings.** Today `listingKey_unique` is the only uniqueness guarantee on `unified_listings` and `unified_closed_listings`. Consider also `(mlsSource, mlsId)` unique to catch cross-MLS bugs.
 - [ ] **`photos` join correctness.** Photos use `listingKey` and `listingId`; listings use `listingKey` and `id`. Pick one join key, ensure it's indexed on both sides, and remove the dead one.
 - [ ] **`location_index` freshness.** Last update 2026-01-02; if this powers search-suggest UI it's stale by ~4 months. Schedule a rebuild or wire it into the unified pipeline.

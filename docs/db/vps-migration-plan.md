@@ -164,33 +164,37 @@ directly, at the cost of the hop you were trying to remove.
 These are real and already affect production reads. Found while building the
 agent database on 2026-10-14.
 
-**`closeDate` is mixed BSON types.** On `unified_closed_listings`: 1,028,003
-`date`, **84,903 `string`**, 4 missing. Two live consequences:
+~~**`closeDate` is mixed BSON types.**~~ — **resolved.** The field is BSON date
+throughout: 1,112,259 date-typed, 0 string-typed, 38 absent.
 
-- `{closeDate: {$gte: <datetime>}}` matches **only** the date-typed documents
-  and silently drops all 84,903 strings. Those strings run to 2026-10-12 — they
-  are current data, not old junk.
-- Conversely `{closeDate: {$gte: "2021-10-14"}}` drops all 1,028,003
-  date-typed documents.
-- The TTL index can only expire date-typed values, so the string-typed rows are
-  exempt and reach back to 2020-08-28, past the nominal 5-year horizon.
+The cause was three writers and only one of them parsing. `historical/seed.py`
+always parsed `closeDate` into a datetime, while `ingest/update-status.py`
+(daily) and `ingest/seed.py` copied Spark's `"YYYY-MM-DD"` through untouched —
+so the string-typed rows were the *current* year's status transitions,
+accumulating daily, and a TTL cannot expire a string so they never aged out.
 
-Both query shapes exist in the current CMA builders:
-`build-pool-premium.py:257`, `build-going-rates.py:422` and
-`build-closed-seasonal-rates.py:512` compare against datetimes, while
-`build-listing-cma.py:534` compares against an `.isoformat()` string. Each is
-losing a slice of the collection. The builders are right to normalize in Python
-afterwards (`coerce_date`), but by then the `$match` has already dropped rows.
+`src/scripts/ingest/closedate.py` now holds the one rule, imported by all three
+writers. `utilities/normalize-close-dates.py` converted the 84,921 existing
+strings; it is dry-run by default, and re-running it is the check that no writer
+has regressed.
 
-*Fix:* normalize the field itself to BSON date in a one-off migration, then keep
-it normalized at ingest in `unified-fetch.py`. A migration is strictly better
-than teaching every reader to use `$convert`, because the converted form cannot
-use an index. **Do this while still on managed Mongo** — it is a data fix, not a
-migration step, and it is much easier to reason about without a cutover in
-flight.
+Readers had to change with the type. `build-listing-cma.py:534` was binding
+`{$gte: <isoformat string>}`, which matches **nothing** against a date field —
+it now passes a datetime. `build-pool-premium.py:257`,
+`build-going-rates.py:422` and `build-closed-seasonal-rates.py:512` already
+compared against datetimes and only gained rows. `build-subdivision-cma.py`
+filters in Python and was never affected. **The rule for any new reader: query
+`closeDate` with a `datetime`, never an ISO string.**
 
-**35 corrupt future `closeDate` values**, the worst being year 5015. They poison
-any "most recent sale" sort. Clamp at ingest and repair the existing rows.
+~~**35 corrupt future `closeDate` values**~~ — **resolved**, and the count was
+wrong. 41 documents carried a future `closeDate`, but **7 were legitimate**:
+type-B lease closings within 3 months, because seasonal leases are booked ahead
+of occupancy. The next future-dated document sat 18 months out, so
+`FUTURE_CLOSE_GRACE` is 183 days — wide enough for a real lease booking, far
+short of the junk. The 34 genuine ones moved to `closeDateCorrupt` with
+`closeDate` removed; nothing was deleted. `build-agents.py` had been clamping at
+`now + 7 days`, which silently dropped all 7 real ones, and now matches the
+shared rule.
 
 **Single-member replica set, and no backups.** Today's cluster is one node, and
 `project_jpsrealtor_vps_data_gaps` records that there are no DB backups and that
@@ -208,7 +212,7 @@ it looks, and both must be resolved before a cutover — see §6 step 0.
 2. Settle the shared dev-PC sync. Two writers against one cluster during a
    cutover is how you lose data silently.
 3. Resize the VPS per §2.
-4. Fix `closeDate` per §5.
+4. ~~Fix `closeDate` per §5.~~ — done.
 
 **Step 1 — MCP layer to the VPS** (reversible in one config file)
 - Run `agents_server.py --transport streamable-http` under systemd; `ops/systemd`

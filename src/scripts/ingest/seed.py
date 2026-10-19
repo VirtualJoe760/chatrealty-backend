@@ -24,13 +24,13 @@ Features:
 
 Usage:
     # Seed from auto-detected flattened file (routes by status)
-    python src/scripts/mls/backend/unified/seed.py
+    python src/scripts/ingest/seed.py
 
     # Seed from specific file
-    python src/scripts/mls/backend/unified/seed.py --input local-logs/flattened_unified_GPS_listings.json
+    python src/scripts/ingest/seed.py --input local-logs/flattened_unified_GPS_listings.json
 
     # Create/refresh indexes on all lifecycle collections
-    python src/scripts/mls/backend/unified/seed.py --indexes-only
+    python src/scripts/ingest/seed.py --indexes-only
 """
 
 import os
@@ -42,6 +42,8 @@ from pathlib import Path
 from pymongo import MongoClient, UpdateOne, GEOSPHERE, ASCENDING, DESCENDING
 from pymongo.errors import BulkWriteError, ConnectionFailure, ServerSelectionTimeoutError
 from dotenv import load_dotenv
+
+from closedate import coerce_close_date  # sibling module
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 🔧 ENV
@@ -172,6 +174,13 @@ def _normalize(raw: dict) -> tuple[dict, bool]:
             }
         except (ValueError, TypeError):
             pass
+    if "closeDate" in raw:
+        coerced = coerce_close_date(raw.get("closeDate"))
+        if coerced is None:
+            raw.pop("closeDate", None)
+        else:
+            raw["closeDate"] = coerced
+
     raw.pop("_id", None)
     return raw, True
 

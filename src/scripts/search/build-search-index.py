@@ -18,9 +18,9 @@ Strategy:
     3. Delete anything older than this run's start time — that's the cleanup.
 
 Usage:
-    python3 src/scripts/mls/backend/build_search_index.py
-    python3 src/scripts/mls/backend/build_search_index.py --dry-run
-    python3 src/scripts/mls/backend/build_search_index.py --skip-cleanup   # don't prune stale
+    python3 src/scripts/search/build-search-index.py
+    python3 src/scripts/search/build-search-index.py --dry-run
+    python3 src/scripts/search/build-search-index.py --skip-cleanup   # don't prune stale
 """
 
 from __future__ import annotations

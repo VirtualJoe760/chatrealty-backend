@@ -31,10 +31,10 @@ listings should stay eligible for a future feed fetch.
 
 Usage:
     # See what would move, write nothing
-    python3 src/scripts/mls/backend/unified/migrate-photos-to-media.py --dry-run
+    python3 src/scripts/utilities/migrate-photos-to-media.py --dry-run
 
     # Do it
-    python3 src/scripts/mls/backend/unified/migrate-photos-to-media.py --apply
+    python3 src/scripts/utilities/migrate-photos-to-media.py --apply
 """
 
 import os

@@ -120,10 +120,15 @@ Scope is ~1.5M closings across all MLSs going back 5 years. Full backfill takes 
 - Writes `local-logs/closed/<MLS>_closed_listings.json`.
 
 ### `flatten.py`
-Normalizes Spark payloads to camelCase. Key concern: `closeDate` comes back mixed-typed (sometimes `datetime`, sometimes ISO string). The CMA builder's `coerce_date` helper handles both forms downstream, but flatten normalizes where it can.
+Normalizes Spark payloads to camelCase. Note that `closeDate` leaves here as a string, because the stage writes JSON and JSON has no date type. `seed.py` is what turns it into a BSON date.
 
 ### `seed.py`
 Bulk upserts into `unified_closed_listings` via `$set` on `listingKey`. Does not touch other lifecycle collections — closed docs live only here.
+
+`parse_date` runs every `closeDate` through `ingest/closedate.py`, which is the
+single rule shared with the live ingest writers. It returns `None` for an
+unparseable value *and* for an implausible far-future one — the feed really
+sends years like 4008 — and a `None` closeDate makes the row skipped.
 
 Indexes created: `listingKey_unique`, `mlsSource_mlsId`, `subdivision_status`, `city_status`, `coordinates_2dsphere`, `modificationTimestamp_desc`, `closeDate_desc` (CMA sorts closings by this).
 
@@ -134,7 +139,7 @@ Indexes created: `listingKey_unique`, `mlsSource_mlsId`, `subdivision_status`, `
 Closed docs mirror active-listing shape plus:
 
 - **closePrice** — sale price
-- **closeDate** — close of escrow (may be string or date; coerce in consumers)
+- **closeDate** — close of escrow. BSON date, always; query it with a `datetime`, never an ISO string, or the comparison matches nothing
 - **originalListPrice** — used for sale-to-list ratio
 - **listPrice** — fallback for sale-to-list if originalListPrice is missing
 - **daysOnMarket** — when present, trusted; otherwise derive from `onMarketDate` → `closeDate`
