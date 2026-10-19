@@ -11,7 +11,7 @@ sync MLS data into MongoDB and precompute the analytics the frontend + AI chat r
 ```
 src/scripts/
 ├── ingest/      live MLS feed → unified_listings / unified_closed_listings / …
-├── historical/  five years of closed sales
+├── historical/  five years of closed sales + the annual archive
 ├── rental/      what things rent for      (going rates, seasonal, pool premium)
 ├── investor/    whether it is a good buy  (cash-flow, inventory + cash-flow rollups)
 ├── comps/       what things sell for      (subdivision + per-listing CMA)

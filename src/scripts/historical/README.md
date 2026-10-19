@@ -12,14 +12,19 @@ Feeds closed/sold listings into `unified_closed_listings`, which is the exclusiv
 ## Directory
 
 ```
-unified/closed/
-├── README.md              ← you are here
-├── fetch.py               ← Spark fetch for StandardStatus='Closed' in a time window
-├── flatten.py             ← Closed-specific flatten (camelCase, closeDate coercion)
-└── seed.py                ← Bulk upsert into unified_closed_listings
+historical/
+├── README.md                ← you are here
+├── fetch.py                 ← Spark fetch for StandardStatus='Closed' in a time window
+├── flatten.py               ← Closed-specific flatten (camelCase, closeDate coercion)
+├── seed.py                  ← Bulk upsert into unified_closed_listings
+├── sync.py                  ← chains fetch → flatten → seed per MLS
+└── build-market-history.py  ← annual archive into market_history
 ```
 
-The root-level orchestrator `backend/historical/sync.py` chains `fetch → flatten → seed` per MLS for the daily rolling delta.
+`sync.py` is the orchestrator for the daily rolling delta.
+`build-market-history.py` runs in the other direction: it reads the collection
+and writes permanent per-year aggregates, so the TTL cannot take the history
+with it. See *The annual archive* below.
 
 ---
 
@@ -78,7 +83,7 @@ Revisit if closed access is confirmed for this feed; removing the entry from
 
 ### 1. Daily delta (automatic — 10:00 cron)
 
-`backend/historical/sync.py` runs a 30-day rolling window across all 8 MLSs. Cheap. Catches recently-closed listings including late corrections and price amendments.
+`sync.py` runs a 30-day rolling window across all 8 MLSs. Cheap. Catches recently-closed listings including late corrections and price amendments.
 
 ```
 0 10 * * *  /root/jpsrealtor/.venv/bin/python3 src/scripts/historical/sync.py
@@ -147,6 +152,53 @@ Closed docs mirror active-listing shape plus:
 The collection is **a superset** — contains not just sales but also lease closings (`propertyType='B'`) and anomalies (`closePrice` < $15 — likely $1 token transactions or data noise). CMA consumers must filter by propertyType/landType at read time.
 
 ---
+
+## The annual archive
+
+The TTL is the point of this section. `closeDate_ttl_5years` deletes any closing
+older than five years, which is correct — Spark only serves five years back, so
+the window is the feed's horizon, not a gap we could fill. But it means the
+history is on a clock. Most of 2021 has already gone: the collection holds
+three months of it (about 51k closings, against 209k for a full year like 2024),
+and 2022 is next.
+
+`build-market-history.py` reads the closings while we still hold them and writes
+one permanent per-year aggregate per area into `market_history`, which has no
+TTL. Five years of individual sales becomes an indefinite series of annual
+medians — the only way a long-run appreciation estimate is possible at all,
+since otherwise the view back would always stop five years short of today.
+
+Scopes are `zip`, `city` and `subdivision`, and they overlap on purpose: a sale
+in a named subdivision counts toward its ZIP and its city too. Both property
+types are archived — `A` is sales, and on a `B` lease `closePrice` is the
+monthly rent, so the same aggregate doubles as rent history.
+
+```bash
+# what the archive holds vs what the collection can still produce
+python3 src/scripts/historical/build-market-history.py --status
+
+# the normal run
+python3 src/scripts/historical/build-market-history.py --all
+```
+
+### A re-run must never make the archive worse
+
+Once the TTL eats part of a year, recomputing that year produces fewer closings
+than the archived figure was built from. An ordinary upsert would replace a
+complete 2022 with a gutted one, which is exactly the loss the archive exists to
+prevent. So any write that would **lower** an existing `closedCount` is refused
+and reported, and `--force` is the only way past it.
+
+`partialYear` carries the same warning into the data: it is true when the
+collection holds fewer than 12 months of that calendar year, or the year is
+still running. In a market this seasonal the mix of months alone moves a median,
+so a partial year must never be read as a full one.
+
+It is a verdict on the **year**, not the area — `yearMonthsCovered` is what sets
+it. The per-area `monthsCovered` is a separate field, and a subdivision with
+closings in 7 months of a complete year is a thin area, not truncated data.
+Tying the flag to the per-area count would mark most subdivision rows partial in
+a year that is perfectly complete.
 
 ## Relationship to the rest of the pipeline
 

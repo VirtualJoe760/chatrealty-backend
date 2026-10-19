@@ -93,8 +93,16 @@ makes it look like two.
 Canonical listing collections are the `unified_*` family: `unified_listings`,
 `unified_closed_listings`, `unified_in_escrow`, `unified_off_market`. Geography
 reference data is `cities`, `counties`, `regions`, `subdivisions`. Derived
-aggregates get their own collections (`rent_rates`) or ride as fields on the
-documents they describe (`cashflowStats`, `cashflowProfile`, `cmaStats`).
+aggregates get their own collections (`rent_rates`, `market_history`) or ride as
+fields on the documents they describe (`cashflowStats`, `cashflowProfile`,
+`cmaStats`).
+
+Two collections hold things the feed cannot regenerate. `market_history` is the
+permanent annual archive — the closings behind it expire on a 5-year TTL, so a
+year lost there is lost for good. `loan_products` and `system_config` hold
+lender-pricing assumptions (the down-payment ladder, mortgage-insurance costs,
+the investor rate spread) that are stored rather than coded so changing one
+needs no deploy. See `docs/tools/market-history.md`.
 
 See `docs/db/` for the operational constraints that the code does not record.
 
@@ -116,10 +124,10 @@ src/scripts/
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
-├── historical/  4  five years of closed sales
+├── historical/  5  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  13  hand-run tools and spent one-shots
+└── utilities/  14  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is what lets

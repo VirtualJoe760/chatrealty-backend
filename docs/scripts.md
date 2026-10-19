@@ -19,10 +19,10 @@ src/scripts/
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
-├── historical/  4  five years of closed sales
+├── historical/  5  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
-└── utilities/  13  hand-run tools and spent one-shots
+└── utilities/  14  hand-run tools and spent one-shots
 ```
 
 Every script sits exactly one level under `src/scripts/`, which is how each one
@@ -159,6 +159,7 @@ Pulls 8 MLS feeds through Spark into the canonical `unified_*` collections.
 | `ingest/fetch-photos.py` | writes `media[]` from Spark's photo sub-resource | daily 9:30 AM |
 | `historical/{fetch,flatten,seed}.py` | the same three steps for 5 years of closed sales | via historical sync |
 | `historical/sync.py` | runs the closed pipeline over a rolling window | daily 10 AM |
+| `historical/build-market-history.py` | `market_history`, the annual archive that outlives the TTL | twice a year, by hand |
 | `search/build-search-index.py` | rebuilds `search_index` for chat autocomplete | daily 4 AM |
 | `ingest/verify-db.py` | integrity, index and MLS-distribution check after seeding | on demand |
 
@@ -190,6 +191,9 @@ not carry. Served by `src/mcp/agents_server.py`.
 - **`utilities/set-investor-spread.py`** — reads or sets the investor-property
   rate premium over `frm_30`. Argument is in percentage points (`0.75` means
   0.75%). No argument prints the current value and the last known base rate.
+- **`utilities/set-loan-products.py`** — reads or reseeds `loan_products`: the
+  down-payment ladder and the mortgage-insurance cost bands. `--seed` writes the
+  defaults and refuses to clobber a document edited since it was seeded.
 - **`archive/mls/backend/`** — the retired per-MLS pipeline. Superseded by
   `unified/`; kept for reference, not runnable as-is.
 
@@ -202,4 +206,6 @@ not carry. Served by `src/mcp/agents_server.py`.
   builders
 - `docs/tools/cashflow-profile.md`, `docs/tools/listing-cashflow.md` — output
   shapes
+- `docs/tools/market-history.md` — the annual archive and the financing
+  assumptions it is paired with
 - `src/scripts/rental/README.md` — per-script notes next to the code

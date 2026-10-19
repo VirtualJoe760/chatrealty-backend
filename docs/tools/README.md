@@ -40,6 +40,8 @@ Database: **`admin`** (yes — all app data is in `admin`; migration to
 | `agents` | 240,236 | `_id` = `"<mlsSource>:<lower mlsId>"` | one doc per MLS agent registration |
 | `brokerages` | 29,703 | `slug` | per-brokerage-brand rollups |
 | `search_index` | 49,614 | — | search-suggest payloads |
+| `market_history` | see below | `_id` = `"<scope>:<key>:<type>:<year>"` | annual medians per area; **permanent, no TTL** |
+| `loan_products` | 2 | `_id` | down-payment ladder, mortgage-insurance cost bands |
 
 ## The block index
 
@@ -64,6 +66,8 @@ tool should return, and the absent case.
 | *(whole doc)* | **`agents`** | `agents/build-agents.py` | 240,236 agents | [agents.md](agents.md) |
 | *(whole doc)* | **`brokerages`** | `agents/build-agents.py` | 29,719 brokerages | [agents.md](agents.md) |
 | *(whole doc)* | **`agent_roster`** | `sync-roster.py` | 158,920 members | [agents.md](agents.md) |
+| *(whole doc)* | **`market_history`** | `historical/build-market-history.py` | zip + city + subdivision, by year | [market-history.md](market-history.md) |
+| *(whole doc)* | **`loan_products`** | `utilities/set-loan-products.py` | 2 config docs | [market-history.md](market-history.md) |
 
 > All coverage counts measured against production on **2026-10-14**. Most are
 > not 100% and never will be — thin markets genuinely lack comps. **Always
@@ -89,6 +93,11 @@ it when a user asks how current a figure is.
 
 The 2 AM chain is strictly ordered and `&&`-chained so no stage reads a
 half-built input. Full detail in `crontab.vps`.
+
+`historical/build-market-history.py` is **not** on cron. It is run by hand once
+or twice a year, and it is the only job whose lateness causes permanent loss —
+the closings it archives expire on a 5-year TTL. See
+[market-history.md](market-history.md).
 
 ---
 

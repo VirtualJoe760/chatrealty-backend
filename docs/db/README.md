@@ -25,10 +25,22 @@ Listings live in the `unified_*` family, one collection per lifecycle stage:
 Geography reference data is `cities`, `counties`, `regions` and `subdivisions`.
 The agent database is `agents`, `brokerages` and `agent_roster`.
 
-Derived aggregates either get their own collection (`rent_rates`) or ride as a
-subdocument on what they describe — `cmaStats` and `cashflowProfile` on
-`subdivisions` and `cities`, `cashflowStats` and `media[]` on listings. Which
-script writes each one is in `AGENTS.md`; the schedule is `crontab.vps`.
+Derived aggregates either get their own collection (`rent_rates`,
+`market_history`) or ride as a subdocument on what they describe — `cmaStats`
+and `cashflowProfile` on `subdivisions` and `cities`, `cashflowStats` and
+`media[]` on listings. Which script writes each one is in `AGENTS.md`; the
+schedule is `crontab.vps`.
+
+Two collections are not derived from the current feed and must not be rebuilt
+from it casually:
+
+| Collection | Holds | Why it is special |
+|---|---|---|
+| `market_history` | annual medians per area | permanent; the live closings behind it expire on a 5-year TTL, so once a year is gone it cannot be recomputed |
+| `loan_products` | down-payment ladder, mortgage-insurance costs | hand-tunable lender-pricing assumptions, not computed from anything |
+
+Both are documented in `docs/tools/market-history.md`. `system_config` holds the
+same kind of stored assumption for the investor rate spread.
 
 The live cluster is the source of truth for counts, sizes and index lists. Query
 it rather than trusting a number written in a doc.

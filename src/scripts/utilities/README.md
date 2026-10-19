@@ -14,7 +14,8 @@ utilities/
 ├── export-photos-collection.py     spent: exported the retired photo store
 ├── migrate-photos-to-media.py      spent: moved that store into media[]
 ├── normalize-close-dates.py        spent: made closeDate a single BSON type
-└── set-investor-spread.py          read/set the investor rate premium
+├── set-investor-spread.py          read/set the investor rate premium
+└── set-loan-products.py            read/reseed the ladder + MI cost bands
 ```
 
 `normalize-close-dates.py` is the exception to "spent": it is dry-run by
@@ -26,6 +27,14 @@ rule it enforces.
 rate premium over `frm_30` gets changed, since that is a lender-pricing
 assumption and lives in `system_config` rather than in code. Its argument is in
 percentage points, so `0.75` means 0.75%.
+
+`set-loan-products.py` is the same idea for the two financing assumptions in
+`loan_products`: the down-payment ladder every listing gets priced at, and what
+mortgage insurance costs per year by LTV. Both are lender pricing rather than
+law, so they are stored and changing one needs no deploy. The ladder is one
+continuous list with no eligibility gating — we show what each down payment does
+to the cash flow and the reader decides which rung is theirs. `--seed` writes
+the defaults and will not overwrite a document edited since it was seeded.
 
 **Read a script before running it.** Only `purge-stale.py` is safety-guarded;
 the rest are unguarded, most have no docstring, and several are one-shots whose
