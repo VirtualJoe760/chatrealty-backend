@@ -38,12 +38,21 @@ from it casually:
 |---|---|---|
 | `market_history` | annual medians per area | permanent; the live closings behind it expire on a 5-year TTL, so once a year is gone it cannot be recomputed |
 | `loan_products` | down-payment ladder, mortgage-insurance costs | hand-tunable lender-pricing assumptions, not computed from anything |
-| `area_geo` | centroid, bbox and p90 radius per area | keyed like `market_history`, so a map is a join; rebuildable |
-| `sales_grid` | sales per ~0.3 mi cell, with `namedShare` | groups by coordinate so unnamed sales still map; rebuildable |
-| `sales_hotspots` | clustered zones per year, caption decided at build | clustering is a calculation, so it is precomputed; rebuildable |
 
 Both are documented in `docs/tools/market-history.md`. `system_config` holds the
 same kind of stored assumption for the investor rate spread.
+
+Four more collections make sales volume and competition mappable. All four
+rebuild from the closings, so none needs a shrink guard:
+
+| Collection | Holds |
+|---|---|
+| `area_geo` | centroid, bbox and p90 radius per area, keyed like `market_history` |
+| `sales_grid` | sales per ~0.3 mi cell, grouped by coordinate so unnamed sales still map |
+| `sales_hotspots` | clustered zones per year, each with a caption decided at build time |
+| `area_competition` | how many agents sell in an area and how concentrated they are |
+
+See `docs/tools/sales-heatmap.md` and `docs/tools/area-competition.md`.
 
 The live cluster is the source of truth for counts, sizes and index lists. Query
 it rather than trusting a number written in a doc.

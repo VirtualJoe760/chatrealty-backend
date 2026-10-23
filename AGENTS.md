@@ -99,8 +99,10 @@ fields on the documents they describe (`cashflowStats`, `cashflowProfile`,
 
 `area_geo`, `sales_grid` and `sales_hotspots` make sales volume mappable — where
 each area is, and how much sold at each location regardless of whether the MLS
-named it. All three are rebuildable from the closings, so none needs a shrink
-guard. See `docs/tools/sales-heatmap.md`.
+named it. `area_competition` adds who sold it and how few of them there were,
+which is what turns a hot area into a reachable one. All four are rebuildable
+from the closings, so none needs a shrink guard. See
+`docs/tools/sales-heatmap.md` and `docs/tools/area-competition.md`.
 
 Two collections hold things the feed cannot regenerate. `market_history` is the
 permanent annual archive — the closings behind it expire on a 5-year TTL, so a
@@ -129,7 +131,7 @@ src/scripts/
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
-├── historical/  9  five years of closed sales + the annual archive
+├── historical/ 10  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
 └── utilities/  14  hand-run tools and spent one-shots

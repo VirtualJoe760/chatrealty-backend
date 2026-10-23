@@ -41,32 +41,22 @@ The closed sync covers **7** associations:
 GPS · CRMLS · CLAW · SOUTHLAND · HIGH_DESERT · BRIDGE · CONEJO_SIMI_MOORPARK
 ```
 
-### ITECH — excluded from closed sync only (2026-10-13)
+### ITECH — excluded from closed sync only
 
 **ITECH is still fully active in the on-market pipeline.** Its listings fetch,
 flatten and seed normally through `unified/run-pipeline.py`, whose own
-`MLS_OPTIONS` still lists all 8. Only closed/sold sales are skipped here.
+`MLS_OPTIONS` lists all 8. Only closed/sold sales are skipped here.
 
-On the 2026-10-13 run, 7 of 8 succeeded and ITECH failed with:
-
-```
-[ITECH] fetch (last 0.0821y) ok
-[ITECH] fetch reported success but closed_0.0821y_ITECH_listings.json is
-        missing — skipping flatten/seed so a stale file cannot be re-seeded
-```
-
-The fetch returns HTTP success but writes no closed-sales file. That pattern is
-consistent with the Spark feed not granting this account closed/sold access for
-the association, rather than a fault on our side — a real fetch failure would
-surface an HTTP error, and the file would be present but empty or malformed if
-the data were simply sparse. The missing-file guard caught it correctly and
-refused to seed, so the failure was loud instead of silently re-seeding stale
-comps.
+Its fetch returns HTTP success but writes no closed-sales file, which is what a
+feed without closed/sold access for the association looks like — a real fetch
+failure surfaces an HTTP error, and sparse data would leave a file that was
+present but empty. The missing-file guard catches it and refuses to seed, so
+the failure is loud instead of silently re-seeding stale comps.
 
 ITECH is a very small association: ~165 KB of on-market data against CRMLS's
-548 MB. Excluding its closed sales costs very little comp coverage, and keeping
-it in the list meant every run reported a failure that needed no action —
-noise that would eventually get ignored and mask a real one.
+548 MB. Excluding its closed sales costs almost no comp coverage, and keeping it
+in the list meant every run reported a failure that needed no action — noise
+that would eventually get ignored and mask a real one.
 
 Declared in `historical/sync.py` as `EXCLUDED_MLS`. It remains a valid
 `--mls` / `--exclude` choice on purpose, so an explicit request prints the
@@ -75,7 +65,7 @@ reason instead of argparse's opaque "invalid choice":
 ```
 $ historical/sync.py --mls ITECH
 [SKIP] ITECH is excluded from the closed sync: no closed/sold feed access for
-       this association (verified 2026-10-13)
+       this association
        ITECH is unaffected in the on-market pipeline (unified/run-pipeline.py).
 ```
 
@@ -270,26 +260,37 @@ than the 5 `build-market-history.py` needs to store an area.
 
 `build-area-geo.py` writes `area_geo` (one centroid, bbox and p90 radius per
 area, keyed exactly as `market_history` keys it). `build-sales-grid.py` writes
-`sales_grid` (sales per ~0.3 mi cell, grouped by **coordinate** rather than by
-subdivision name, with a `namedShare` on every cell).
+`sales_grid` (sales per ~0.3 mi cell, grouped by **coordinate** not by name,
+with a `namedShare` on every cell).
 
-The grid exists because a third of closings carry no real subdivision name
-(~89% in CRMLS territory since Sept 2025), and grouping those by name collapses
-them into one per-city bucket spanning miles.
+The grid exists because most closings carry no usable subdivision name — 11% of
+2026 type-A closings carry one at all, and 31% of those are placeholders like
+`Other` — and grouping the rest by name collapses them into one per-city bucket
+spanning miles. `build-sales-hotspots.py` then writes `sales_hotspots`:
+clustered zones, one doc per zone per year, each with a centre, radius and a
+caption decided at build time — clustering is a calculation, so it cannot live
+in a read route.
 
-`build-sales-hotspots.py` writes `sales_hotspots`: clustered zones, one doc per
-zone per year, each with a centre, radius and a caption decided at build time.
-Clustering is a calculation, so it cannot live in a read route.
+`build-area-competition.py` writes `area_competition`: how many agents sold each
+area and how concentrated they were. The headline is `effectiveAgents` (1/HHI,
+the equal-sized competitors matching the concentration observed), not the raw
+count, which agents passing through inflate. Sun City is the valley's
+best-selling subdivision and no farm at 439 agents; Seven Lakes Country Club
+sells an eighth as much with one agent on 71% of it and no new construction —
+`vintage.newBuildShare` keeps that separate, because a tract whose sales are new
+builds is held by whoever built it. They chain in this order:
 
 ```bash
-python3 src/scripts/historical/build-area-geo.py --cv       # geometry first
-python3 src/scripts/historical/build-sales-grid.py --cv     # then the grid
-python3 src/scripts/historical/build-sales-hotspots.py --cv # then the zones
+python3 src/scripts/historical/build-area-geo.py --cv
+python3 src/scripts/historical/build-sales-grid.py --cv
+python3 src/scripts/historical/build-sales-hotspots.py --cv
+python3 src/scripts/historical/build-area-competition.py --cv
 ```
 
-None of the three needs the shrink guard: all rebuild from the closings. Full
-detail — including why zones are peaks, not contiguous blobs — is in
-`docs/tools/sales-heatmap.md`.
+None needs the shrink guard: all rebuild from the closings. Full detail — why
+zones are peaks rather than contiguous blobs, why sentinel "non member" agents
+must be excluded — is in `docs/tools/sales-heatmap.md` and
+`docs/tools/area-competition.md`.
 
 ## Relationship to the rest of the pipeline
 

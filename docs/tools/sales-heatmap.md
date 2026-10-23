@@ -227,6 +227,14 @@ Both collections are rebuildable from the closings at any time, so neither needs
 the shrink guard `market_history` carries. Re-running is idempotent: `_id` is
 derived from the area key or the grid index.
 
+## Who sells it
+
+Volume is only half the question. `area_competition` carries how many agents
+sold each area and how concentrated they are — `effectiveAgents` (1/HHI), the
+top agent's share, and the top ten by name — keyed both to `market_history`
+areas and to `sales_hotspots.zoneId`, so a zone circle can be coloured by
+competition from one query. See `docs/tools/area-competition.md`.
+
 ## Reading a year
 
 `salesByYear` lets a map animate, but 2026 holds 11 of 12 months, so the current
