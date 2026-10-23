@@ -18,13 +18,18 @@ historical/
 ├── flatten.py               ← Closed-specific flatten (camelCase, closeDate coercion)
 ├── seed.py                  ← Bulk upsert into unified_closed_listings
 ├── sync.py                  ← chains fetch → flatten → seed per MLS
-└── build-market-history.py  ← annual archive into market_history
+├── build-market-history.py  ← annual archive into market_history
+├── rank-subdivisions.py     ← read-only report over market_history
+├── build-area-geo.py        ← area_geo: where each area is
+├── build-sales-grid.py      ← sales_grid: sales by coordinate, for heat maps
+└── build-sales-hotspots.py ← sales_hotspots: clustered zones for the map
 ```
 
 `sync.py` is the orchestrator for the daily rolling delta.
 `build-market-history.py` runs in the other direction: it reads the collection
 and writes permanent per-year aggregates, so the TTL cannot take the history
-with it. See *The annual archive* below.
+with it. See *The annual archive* below. `rank-subdivisions.py` only reads
+that archive — see *Ranking subdivisions* below.
 
 ---
 
@@ -199,6 +204,92 @@ it. The per-area `monthsCovered` is a separate field, and a subdivision with
 closings in 7 months of a complete year is a thin area, not truncated data.
 Tying the flag to the per-area count would mark most subdivision rows partial in
 a year that is perfectly complete.
+
+## Ranking subdivisions
+
+`rank-subdivisions.py` answers "which subdivisions are selling the most" out of
+`market_history`. It is a read-only operator report: every figure it prints is a
+stored field, summed or sorted, so it never rescans the closings and never
+defines a second median.
+
+```bash
+# busiest subdivisions in the latest complete archived year
+python3 src/scripts/historical/rank-subdivisions.py
+
+# six-year totals with the per-year breakdown
+python3 src/scripts/historical/rank-subdivisions.py --all --trend
+
+# one city, or leases instead of sales, or ranked by speed of sale
+python3 src/scripts/historical/rank-subdivisions.py --city "Palm Desert"
+python3 src/scripts/historical/rank-subdivisions.py --type B
+python3 src/scripts/historical/rank-subdivisions.py --sort dom --min-count 50
+```
+
+### Placeholder names are excluded by default
+
+About **31%** of closings that carry a `subdivisionName` carry a placeholder —
+`Other`, `Not Applicable`, `N/A`. Those mean "none entered", not the name of a
+large community, and ranked naively they take 8 of the top 10 slots: `Other` in
+Corona alone logs 4,033 sales. The script drops them and reports how many it
+dropped; `--include-placeholders` puts them back, marked.
+
+The blocklist is the union of the sets already in `build-listing-cma.py`,
+`build-search-index.py`, `build-closed-seasonal-rates.py` and
+`build-cashflow-profile.py`, plus a pattern those four miss: Ventura and Santa
+Barbara counties spell the placeholder as an MLS area code (`Ojai: Other`,
+`Oxnard: Other - 0031`).
+
+A subdivision whose name is simply its city (`Oceanside` in Oceanside, 4.2% of
+closings) is kept but marked `*` — a real area, only a coarse one.
+
+### Name coverage is printed, because it collapsed
+
+CRMLS stopped publishing `SubdivisionName` through Spark around **September
+2025** — Spark returns the field as `null`, and `camelize_keys` drops nulls, so
+the key is absent. No substitute field survives either. Coverage on type-A
+closings: 26.2% (2024) → 20.4% (2025) → **11.0% (2026)**, a cliff between Aug
+and Sep 2025, not a drift. The Greater Palm Springs feed is unaffected, so
+Coachella Valley is sound; CRMLS territory is not. Full detail in
+`docs/tools/market-history.md`.
+
+`rank-subdivisions.py` therefore prints coverage per year and warns below 20%,
+deriving the ratio from the archive alone (city scope counts every closing with
+a city, subdivision scope only the named ones) so it costs no extra scan.
+Without that line a 2026 ranking looks exactly like a 2024 one while resting on
+a tenth of the market.
+
+### Counts sum across years; medians do not
+
+The median of six annual medians is not a six-year median. A multi-year run
+therefore sums `closedCount` but takes each median from the latest year **that
+subdivision** has rows for, printed per row in the `yr` column. A blank cell in
+the `--trend` table means no archived rows that year: either no sales, or fewer
+than the 5 `build-market-history.py` needs to store an area.
+
+## Mapping sales volume
+
+`build-area-geo.py` writes `area_geo` (one centroid, bbox and p90 radius per
+area, keyed exactly as `market_history` keys it). `build-sales-grid.py` writes
+`sales_grid` (sales per ~0.3 mi cell, grouped by **coordinate** rather than by
+subdivision name, with a `namedShare` on every cell).
+
+The grid exists because a third of closings carry no real subdivision name
+(~89% in CRMLS territory since Sept 2025), and grouping those by name collapses
+them into one per-city bucket spanning miles.
+
+`build-sales-hotspots.py` writes `sales_hotspots`: clustered zones, one doc per
+zone per year, each with a centre, radius and a caption decided at build time.
+Clustering is a calculation, so it cannot live in a read route.
+
+```bash
+python3 src/scripts/historical/build-area-geo.py --cv       # geometry first
+python3 src/scripts/historical/build-sales-grid.py --cv     # then the grid
+python3 src/scripts/historical/build-sales-hotspots.py --cv # then the zones
+```
+
+None of the three needs the shrink guard: all rebuild from the closings. Full
+detail — including why zones are peaks, not contiguous blobs — is in
+`docs/tools/sales-heatmap.md`.
 
 ## Relationship to the rest of the pipeline
 

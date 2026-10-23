@@ -93,6 +93,19 @@ Check `closedCount` before quoting anything. `low` confidence at the
 subdivision scope is common and normal; roll up to the ZIP rather than quoting a
 median built on six sales.
 
+At the subdivision scope, check name coverage before trusting a recent year.
+CRMLS stopped publishing `SubdivisionName` through Spark around September 2025 —
+coverage on closings fell from ~26% (2024) to ~11% (2026), a cliff between
+August and September 2025, with no substitute field available. The Greater Palm
+Springs feed still populates it, so Coachella Valley is unaffected; CRMLS
+territory is not. `rank-subdivisions.py` prints the ratio and warns below 20%.
+
+At the subdivision scope, exclude placeholder names before ranking anything.
+~31% of closings that carry a `subdivisionName` carry `Other`, `Not Applicable`
+or `N/A`, which mean "none entered" — in a volume ranking they take 8 of the top
+10 slots. `src/scripts/historical/rank-subdivisions.py` is the read-only report
+that does this correctly and documents the blocklist.
+
 ### The guard that makes it worth keeping
 
 A re-run must never make the archive worse. Once the TTL has eaten part of a

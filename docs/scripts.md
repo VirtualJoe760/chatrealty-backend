@@ -19,7 +19,7 @@ src/scripts/
 ├── investor/    3  whether it is a good buy
 ├── comps/       2  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
-├── historical/  5  five years of closed sales + the annual archive
+├── historical/  9  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database
 ├── search/      1  chat autocomplete index
 └── utilities/  14  hand-run tools and spent one-shots
@@ -160,6 +160,10 @@ Pulls 8 MLS feeds through Spark into the canonical `unified_*` collections.
 | `historical/{fetch,flatten,seed}.py` | the same three steps for 5 years of closed sales | via historical sync |
 | `historical/sync.py` | runs the closed pipeline over a rolling window | daily 10 AM |
 | `historical/build-market-history.py` | `market_history`, the annual archive that outlives the TTL | twice a year, by hand |
+| `historical/rank-subdivisions.py` | read-only report: busiest subdivisions out of `market_history` | on demand |
+| `historical/build-area-geo.py` | `area_geo`, one centroid + radius per area, for maps | on demand |
+| `historical/build-sales-grid.py` | `sales_grid`, sales volume by coordinate rather than by name | on demand |
+| `historical/build-sales-hotspots.py` | `sales_hotspots`, clustered zones with a stored caption | on demand, after the grid |
 | `search/build-search-index.py` | rebuilds `search_index` for chat autocomplete | daily 4 AM |
 | `ingest/verify-db.py` | integrity, index and MLS-distribution check after seeding | on demand |
 
