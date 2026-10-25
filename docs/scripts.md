@@ -17,7 +17,7 @@ One folder per domain, one level deep:
 src/scripts/
 ├── rental/      6  what things rent for
 ├── investor/    3  whether it is a good buy
-├── comps/       2  what things sell for
+├── comps/       4  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
 ├── historical/ 10  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database
@@ -138,11 +138,20 @@ Mello-Roos and special assessments are not modelled.
 |---|---|---|
 | `comps/build-subdivision-cma.py` | `cmaStats` on subdivisions | daily 8:00 AM |
 | `comps/build-listing-cma.py` | `cmaStats` on each listing | Sundays 1:00 AM |
+| `comps/build-cma-comps.py` | `cma_comps` | not scheduled |
+| `comps/area-cma.py` | nothing — reads `cma_comps` | on demand |
 
-Both write a field called `cmaStats`, on different collections — the
+The first two write a field called `cmaStats`, on different collections — the
 subdivision one is an area aggregate, the listing one is that listing's own comp
 set. The listing job fans out over the whole active set, which is why it is
 weekly and takes `--workers`.
+
+The other two serve a parcel drawn on a map, which has neither a subject
+property to score against nor a name to look up. `build-cma-comps.py` flattens
+closed sales and active listings into one normalised, geo-indexed collection;
+`area-cma.py` turns coordinates into a CMA with one `find` and medians over
+stored fields. It holds no field parsing at all — see `docs/tools/area-cma.md`
+for the three empty column names and two unit traps that is avoiding.
 
 ## Ingest — `ingest/` and `historical/`
 

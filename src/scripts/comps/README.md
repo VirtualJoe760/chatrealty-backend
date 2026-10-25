@@ -5,13 +5,63 @@ What things sell for.
 ```
 comps/
 ├── build-subdivision-cma.py   daily 8 AM: cmaStats on every subdivision
-└── build-listing-cma.py       Sundays: cmaStats on every active sale listing
+├── build-listing-cma.py       Sundays: cmaStats on every active sale listing
+├── build-cma-comps.py         cma_comps: one normalised comparable per doc
+└── area-cma.py                coordinates -> CMA, on demand
 ```
 
-Both write a field named `cmaStats`, on different collections — the subdivision
-one is an area aggregate, the listing one is that listing's own comp set.
-Architecture is in `docs/cma/SUBDIVISION_AND_CITY_CMA.md` and
+The first two write a field named `cmaStats`, on different collections — the
+subdivision one is an area aggregate, the listing one is that listing's own comp
+set. Architecture is in `docs/cma/SUBDIVISION_AND_CITY_CMA.md` and
 `docs/cma/LISTING_CMA.md`.
+
+The last two serve a third scope: a parcel drawn on a map, which has no subject
+property to score against and no name to look up. Architecture is in
+`docs/tools/area-cma.md`.
+
+---
+
+## `build-cma-comps.py`
+
+Flattens `unified_closed_listings` and `unified_listings` into one `cma_comps`
+collection, one document per comparable, with every figure a CMA needs already
+computed and a `center` that is always populated.
+
+```bash
+src/scripts/comps/build-cma-comps.py --cv              # Coachella Valley
+src/scripts/comps/build-cma-comps.py --all             # whole feed
+src/scripts/comps/build-cma-comps.py --cv --dry-run    # measure, write nothing
+src/scripts/comps/build-cma-comps.py --status          # what is in there now
+```
+
+This is where the feed's empty column names are resolved: `lotSizeSqft`,
+`daysOnMarket`, `poolPrivateYN`, `poolYn` and `address` are all 0% populated and
+each has a differently-named replacement, two of which carry further traps
+(`lotSizeArea` mixes acres and square feet; `poolFeatures` has two
+serialisations and presence is not a private pool). The measurements and the
+resolution rules are in `docs/tools/area-cma.md`.
+
+Rows without a valid point, a positive price or an event date are dropped and
+counted — an unplaced sale cannot belong to a parcel and an unpriced one cannot
+be a comp. `--side closed` or `--side active` limits the run; the stale sweep is
+skipped in that case, because a one-sided run cannot tell a stale row from one
+the other side owns.
+
+## `area-cma.py`
+
+Reads `cma_comps` and returns a CMA for a parcel. Holds no field parsing — one
+`find` and medians over stored per-item figures.
+
+```bash
+src/scripts/comps/area-cma.py --cell g0.005:6750:-23261:A   # a heat-map cell
+src/scripts/comps/area-cma.py --bbox -116.33,33.70,-116.29,33.74
+src/scripts/comps/area-cma.py --polygon "-116.33,33.70 -116.29,33.70 -116.30,33.74"
+src/scripts/comps/area-cma.py --cell g0.005:6750:-23261:A --months 24 --json
+```
+
+`--polygon` takes one quoted string rather than a list, and both coordinate
+options accept a leading `-`, because every longitude in this market is negative
+and argparse would otherwise read it as an option flag.
 
 ---
 

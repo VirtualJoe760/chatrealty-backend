@@ -42,8 +42,8 @@ from it casually:
 Both are documented in `docs/tools/market-history.md`. `system_config` holds the
 same kind of stored assumption for the investor rate spread.
 
-Four more collections make sales volume and competition mappable. All four
-rebuild from the closings, so none needs a shrink guard:
+Five more collections make sales volume, competition and comps mappable. All
+five rebuild from the feed, so none needs a shrink guard:
 
 | Collection | Holds |
 |---|---|
@@ -51,8 +51,17 @@ rebuild from the closings, so none needs a shrink guard:
 | `sales_grid` | sales per ~0.3 mi cell, grouped by coordinate so unnamed sales still map |
 | `sales_hotspots` | clustered zones per year, each with a caption decided at build time |
 | `area_competition` | how many agents sell in an area and how concentrated they are |
+| `cma_comps` | one normalised comparable per document, closed and active together |
 
-See `docs/tools/sales-heatmap.md` and `docs/tools/area-competition.md`.
+`cma_comps` is the only one keyed by listing rather than by area, because a
+parcel drawn on a map spans both listing collections and a read-time join is
+what the invariant exists to prevent. Its `center` is built from the scalar
+`latitude`/`longitude` pair, which is what makes `$geoWithin` complete —
+`unified_closed_listings.coordinates` is 2dsphere indexed but present on a
+minority of rows, so a geo query against the feed silently under-returns.
+
+See `docs/tools/sales-heatmap.md`, `docs/tools/area-competition.md` and
+`docs/tools/area-cma.md`.
 
 The live cluster is the source of truth for counts, sizes and index lists. Query
 it rather than trusting a number written in a doc.

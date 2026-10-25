@@ -100,9 +100,11 @@ fields on the documents they describe (`cashflowStats`, `cashflowProfile`,
 `area_geo`, `sales_grid` and `sales_hotspots` make sales volume mappable — where
 each area is, and how much sold at each location regardless of whether the MLS
 named it. `area_competition` adds who sold it and how few of them there were,
-which is what turns a hot area into a reachable one. All four are rebuildable
-from the closings, so none needs a shrink guard. See
-`docs/tools/sales-heatmap.md` and `docs/tools/area-competition.md`.
+which is what turns a hot area into a reachable one. `cma_comps` holds one
+normalised comparable per document, closed and active together, so a parcel
+drawn on a map yields a CMA from one query. All five are rebuildable from the
+feed, so none needs a shrink guard. See `docs/tools/sales-heatmap.md`,
+`docs/tools/area-competition.md` and `docs/tools/area-cma.md`.
 
 Two collections hold things the feed cannot regenerate. `market_history` is the
 permanent annual archive — the closings behind it expire on a 5-year TTL, so a
@@ -129,7 +131,7 @@ One folder per domain, one level deep, so the folder name is the category:
 src/scripts/
 ├── rental/      6  what things rent for
 ├── investor/    3  whether it is a good buy
-├── comps/       2  what things sell for
+├── comps/       4  what things sell for
 ├── ingest/      9  live MLS feed -> unified_*
 ├── historical/ 10  five years of closed sales + the annual archive
 ├── agents/      2  agent + brokerage database

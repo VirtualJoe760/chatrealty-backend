@@ -235,6 +235,21 @@ top agent's share, and the top ten by name — keyed both to `market_history`
 areas and to `sales_hotspots.zoneId`, so a zone circle can be coloured by
 competition from one query. See `docs/tools/area-competition.md`.
 
+## Comps for a cell
+
+A cell's `bbox` is a parcel, so any cell on the map can produce a CMA:
+`area-cma.py --cell <sales_grid _id>` returns the closed and active sides,
+medians, pool mix, absorption and a comp list for exactly that square. The same
+call takes an arbitrary drawn `--bbox` or `--polygon`, so the heat map and the
+live map share one code path. See `docs/tools/area-cma.md`.
+
+Note that it reads `cma_comps`, not the closings directly. A `$geoWithin`
+against `unified_closed_listings.coordinates` under-returns badly — that field
+is present on a minority of rows while `latitude`/`longitude` are on
+essentially all of them — and the scalar pair, while complete, range-scans a
+whole latitude band across the state. `cma_comps.center` is built from the
+scalar pair to get both properties at once.
+
 ## Reading a year
 
 `salesByYear` lets a map animate, but 2026 holds 11 of 12 months, so the current
