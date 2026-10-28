@@ -93,6 +93,13 @@ is a subject. Comps are ordered by `completeness` then recency, the same rule
 
 `unified_in_escrow` is excluded, matching the subdivision CMA: a pending deal
 is a commitment in progress, not a market observation.
+
+── Two readers ───────────────────────────────────────────────────────────────
+`area-cma.py` reads this for a drawn parcel. `build-listing-cma.py` reads it
+for a subject property's nearest comps, which is why the scoring attributes
+(`view`, `architecturalStyle`, `stories`, `landType`, `garageSpaces`) ride along
+even though a parcel summary never uses them. The listing CMA needs the active
+side current, so in cron this build runs immediately before it.
 """
 
 import argparse
@@ -154,11 +161,12 @@ PROJECTION = {
     "lotSizeSquareFeet": 1, "lotSizeAcres": 1, "lotSizeArea": 1,
     "lotSizeUnits": 1,
     "bedsTotal": 1, "bathsTotal": 1, "bathroomsTotalInteger": 1,
-    "yearBuilt": 1, "garageSpaces": 1, "view": 1, "stories": 1,
+    "yearBuilt": 1, "garageSpaces": 1, "view": 1, "stories": 1, "levels": 1,
+    "architecturalStyle": 1, "landType": 1,
     "poolFeatures": 1, "spaFeatures": 1,
     "latitude": 1, "longitude": 1,
     "city": 1, "postalCode": 1, "subdivisionName": 1, "countyOrParish": 1,
-    "unparsedAddress": 1, "streetNumber": 1, "streetName": 1,
+    "unparsedAddress": 1, "streetNumber": 1, "streetName": 1, "streetSuffix": 1,
     "slug": 1, "slugAddress": 1,
 }
 
@@ -260,6 +268,49 @@ def feature_kind(v):
     if t & {"community", "association", "shared", "in ground, community"}:
         return "community"
     return "other"
+
+
+def flat_text(v):
+    """`view` and `architecturalStyle` arrive as a string, a list, or a dict of
+    flags. One comma-joined string, so a reader never branches on the type."""
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        parts = [str(k) for k, on in v.items() if on is True] or \
+                [str(x) for x in v.values() if isinstance(x, str) and x]
+    elif isinstance(v, (list, tuple, set)):
+        parts = [str(x) for x in v if x]
+    else:
+        parts = [str(v)]
+    out = ", ".join(p.strip() for p in parts if str(p).strip())
+    return out or None
+
+
+def resolve_stories(d):
+    """`stories` is near-empty; RESO puts it in `levels`, often as several flags
+    at once ({'ground Level, No Unit Above': True, 'one': True}), so every flag
+    is tried, not just the first."""
+    v = num(d.get("stories"))
+    if v and 0 < v < 10:
+        return int(v)
+    lv = d.get("levels")
+    if isinstance(lv, dict):
+        cands = [k for k, on in lv.items() if on]
+    elif isinstance(lv, (list, tuple)):
+        cands = list(lv)
+    elif lv is not None:
+        cands = [p for p in str(lv).split(",")]
+    else:
+        return None
+    words = {"one": 1, "single": 1, "two": 2, "three": 3, "multi": 3, "tri": 3}
+    for c in cands:
+        t = str(c).strip().lower()
+        for w, n in words.items():
+            if t.startswith(w):
+                return n
+        if t[:1].isdigit():
+            return int(t[0])
+    return None
 
 
 def street_address(d):
@@ -371,6 +422,10 @@ def build_doc(d, status, now):
         "yearBuilt": year_built,
         "ageAtEvent": (event.year - year_built) if year_built else None,
         "garageSpaces": num(d.get("garageSpaces")),
+        "stories": resolve_stories(d),
+        "view": flat_text(d.get("view")),
+        "architecturalStyle": flat_text(d.get("architecturalStyle")),
+        "landType": (str(d.get("landType")).strip() or None) if d.get("landType") else None,
 
         "poolKind": pool,
         "hasPrivatePool": pool == "private",
@@ -391,6 +446,9 @@ def build_doc(d, status, now):
         "subdivisionName": d.get("subdivisionName"),
         "county": d.get("countyOrParish"),
         "address": street_address(d),
+        "streetNumber": d.get("streetNumber"),
+        "streetName": d.get("streetName"),
+        "streetSuffix": d.get("streetSuffix"),
         "slug": d.get("slugAddress") or d.get("slug"),
 
         "builtAt": now.replace(tzinfo=None),

@@ -60,7 +60,8 @@ for no product benefit. A 4-12 hour runtime is acceptable for these jobs.
 
 Smaller rollups that finish in under an hour stay daily. `build-subdivision-cma.py`
 (1,426 docs) is daily; `build-listing-cma.py` (tens of thousands of listings) is
-weekly.
+weekly, chained after `build-cma-comps.py` because it takes its comps from that
+snapshot.
 
 Never trade algorithm fidelity for a tighter slot.
 

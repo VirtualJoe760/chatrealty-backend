@@ -5,8 +5,8 @@ What things sell for.
 ```
 comps/
 ├── build-subdivision-cma.py   daily 8 AM: cmaStats on every subdivision
-├── build-listing-cma.py       Sundays: cmaStats on every active sale listing
-├── build-cma-comps.py         cma_comps: one normalised comparable per doc
+├── build-listing-cma.py       Sundays, after cma_comps: nearest like-kind comps on every active sale listing
+├── build-cma-comps.py         Sundays 1 AM: cma_comps, one normalised comparable per doc
 └── area-cma.py                coordinates -> CMA, on demand
 ```
 
@@ -25,7 +25,11 @@ property to score against and no name to look up. Architecture is in
 
 Flattens `unified_closed_listings` and `unified_listings` into one `cma_comps`
 collection, one document per comparable, with every figure a CMA needs already
-computed and a `center` that is always populated.
+computed and a `center` that is always populated. Two readers: `area-cma.py`
+for a drawn parcel, and `build-listing-cma.py` for each listing's nearest
+like-kind comps — which is why it runs first in the Sunday chain and carries
+the scoring attributes (`view`, `architecturalStyle`, `stories`, `landType`)
+a parcel summary never uses. The whole feed builds in about 6 minutes.
 
 ```bash
 src/scripts/comps/build-cma-comps.py --cv              # Coachella Valley

@@ -137,14 +137,16 @@ Mello-Roos and special assessments are not modelled.
 | Script | Writes | Runs |
 |---|---|---|
 | `comps/build-subdivision-cma.py` | `cmaStats` on subdivisions | daily 8:00 AM |
-| `comps/build-listing-cma.py` | `cmaStats` on each listing | Sundays 1:00 AM |
-| `comps/build-cma-comps.py` | `cma_comps` | not scheduled |
+| `comps/build-cma-comps.py` | `cma_comps` | Sundays 1:00 AM, first in the chain |
+| `comps/build-listing-cma.py` | `cmaStats` on each listing | Sundays, right after `build-cma-comps.py` |
 | `comps/area-cma.py` | nothing — reads `cma_comps` | on demand |
 
 The first two write a field called `cmaStats`, on different collections — the
 subdivision one is an area aggregate, the listing one is that listing's own comp
 set. The listing job fans out over the whole active set, which is why it is
-weekly and takes `--workers`.
+weekly and takes `--workers`. It takes its comps from `cma_comps` — the nearest
+like-kind homes within ±15% of list price, searched in 0.5/1/2/3-mile rings —
+so the two run as one `flock`ed chain. See `docs/cma/LISTING_CMA.md`.
 
 The other two serve a parcel drawn on a map, which has neither a subject
 property to score against nor a name to look up. `build-cma-comps.py` flattens

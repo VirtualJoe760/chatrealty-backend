@@ -142,6 +142,9 @@ that also has one is priced on the private pool.
 | `daysOnMarket`, `domSource` | date arithmetic, not datetime — see below |
 | `poolKind`, `hasPrivatePool`, `spaKind` | four-valued, plus `unknown` |
 | `beds`, `baths`, `yearBuilt`, `ageAtEvent`, `garageSpaces` | as fed |
+| `stories` | from `stories`, else any of the `levels` flags (`'one'`, `'Two'`, `'1'`) |
+| `view`, `architecturalStyle` | flattened to one string; the feed sends a string, list or dict of flags |
+| `landType` | as fed; the listing CMA uses it to keep leased land with leased land |
 | `eventDate`, `eventYear` | `closeDate` for a sale, `onMarketDate` for a listing |
 | `saleToListRatio` | `closePrice ÷ originalListPrice`, closed only |
 | `completeness` | fraction of nine comp fields present — the comp sort key |
@@ -189,6 +192,9 @@ one.
 - Closed sales expire on a 5-year TTL (`closeDate_ttl_5years`,
   `expireAfterSeconds=157680000`), so the closed window has a hard horizon no
   matter what `--months` asks for.
+- `cma_comps` also feeds the listing CMA (`docs/cma/LISTING_CMA.md`), which is
+  why it carries scoring attributes a parcel summary never reads, and why cron
+  builds it immediately before that job.
 - `cma_comps` is a snapshot. An active listing that closed since the last build
   sits in both sides until the next run; `builtAt` and the stale sweep bound how
   long.

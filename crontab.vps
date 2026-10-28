@@ -7,10 +7,11 @@
 
 
 # ── Listing CMA — weekly Sunday 1 AM ─────────────────────────────────────────
-# MEASURED 2026-10-13: last run took 48 hr (2,892 min), not ~11 hr. It overruns
-# into Mon/Tue, so the Sunday rate-profiles skip below no longer buys it a clear
-# window. Needs either more workers or a narrower --all scope.
-0 1 * * 0 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/comps/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1
+# cma_comps first: the listing CMA takes its comps from it, so its active side
+# must be current. Measured: cma_comps ~6 min for the whole feed; the radius
+# listing CMA ~2 hr for ~46k listings at 4 workers (the city-cascade engine it
+# replaced took 4–5 days). flock stops a slow run overlapping the next one.
+0 1 * * 0 cd /root/jpsrealtor && /usr/bin/flock -n /tmp/listing-cma.lock sh -c '.venv/bin/python3 -u src/scripts/comps/build-cma-comps.py --all >> local-logs/cma-comps-cron.log 2>&1 && .venv/bin/python3 -u src/scripts/comps/build-listing-cma.py --all --workers 4 >> local-logs/listing-cma-cron.log 2>&1'
 
 # ── MLS full sync — Sunday 3 AM (catches missed listings, refreshes all data) ─
 0 3 * * 0 cd /root/jpsrealtor && /root/jpsrealtor/.venv/bin/python3 src/scripts/ingest/run-pipeline.py --all >> /var/log/mls-update-full.log 2>&1

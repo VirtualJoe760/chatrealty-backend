@@ -55,7 +55,8 @@ five rebuild from the feed, so none needs a shrink guard:
 
 `cma_comps` is the only one keyed by listing rather than by area, because a
 parcel drawn on a map spans both listing collections and a read-time join is
-what the invariant exists to prevent. Its `center` is built from the scalar
+what the invariant exists to prevent. It is also where the listing CMA finds
+each listing's nearest comps. Its `center` is built from the scalar
 `latitude`/`longitude` pair, which is what makes `$geoWithin` complete —
 `unified_closed_listings.coordinates` is 2dsphere indexed but present on a
 minority of rows, so a geo query against the feed silently under-returns.

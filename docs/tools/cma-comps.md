@@ -9,7 +9,7 @@ analysis with a different internal shape.
 | `subdivisions.cmaStats` | `build-subdivision-cma.py` | `slug` | daily 8 AM | `get_subdivision_cma`, `get_market_stats` |
 | `unified_listings.cmaStats` | `build-listing-cma.py` | `listingKey` | Sun 1 AM | `find_comparables` |
 
-**Coverage:** all 1,426 subdivisions · 46,768 active listings. Note `cities.cmaStats`
+**Coverage:** all 1,426 subdivisions · every active sale listing that has coordinates. Note `cities.cmaStats`
 is **not** populated (0 docs) — city-level sale stats are not built; use
 `inventoryProfile` and `cashflowProfile` for cities.
 
@@ -97,36 +97,30 @@ Reading rules:
 
 ## `unified_listings.cmaStats` — per-listing comps
 
-A different shape. Runs the same 5-level hierarchy / 12-factor scoring engine
-the frontend used to run on demand, persisted so a comp lookup is a `findOne`
-instead of a 1–20 s round-trip.
+A different shape: the nearest like-kind comps for one listing. A comp must
+share the subject's `propertySubType` and land class, sit within ±15% of its
+list price, and be found by searching outward in 0.5/1/2/3-mile rings — never
+beyond 3 miles. Full rule, schema and confidence rubric:
+[`docs/cma/LISTING_CMA.md`](../cma/LISTING_CMA.md). The website reads it and does
+not compute comps itself.
 
 ```ts
 interface ListingCmaStats {
-  subject: { listingKey; address; city; subdivisionName; listPrice;
-             livingArea; lotSize; /* … */ };
-  tier: string;                        // which fallback level produced the comps
-  activeComps: Comp[];
+  engineVersion: 2;                    // only trust 2; older shapes are the retired engine
+  tier: string;                        // selects scoring weights only
+  subject: { listPrice; livingArea; lotSize; propertySubType; pool; /* … */ };
+  activeComps: Comp[];                 // each carries distanceMiles
   closedComps: Comp[];
   stats: { active: object; closed: object };
+  searchCriteria: { ringMilesUsed; maxCompDistanceMiles; closedLookbackMonths;
+                    priceRange; likeKind; /* … */ };
   limitations: string[];               // ← surface these
   inferences: string[];                // ← and these
   narrative: string;                   // prose summary, ready to quote
-  searchCriteria: {
-    levelsUsed; subdivisionMatched; dateRangeUsed;
-    sqftRangeUsed; totalCandidatesEvaluated;
-  };
-  generatedAt: string; lastUpdated: Date;
+  quality: { confidence; downgradedFor: string[] };
+  lastUpdated: string;
 }
 ```
-
-Match hierarchy — `tier` and `searchCriteria.levelsUsed` record which fired:
-
-1. case-insensitive exact `subdivisionName` match
-2. relaxed sqft range
-3. city
-4. geographic radius
-5. widest fallback
 
 Reading rules:
 
@@ -135,12 +129,10 @@ Reading rules:
   definitive.
 - **`narrative` is pre-written prose** — quote it instead of re-deriving a
   summary from the comp arrays.
-- **Check `tier` before trusting tightness.** Level 1 comps are same-community;
-  level 4–5 comps are a radius sweep and deserve a caveat.
-- **Placeholder subdivision names** (`"Other"`, `"None"`, `"N/A"`,
-  `"Not in a Development"`) group unrelated properties. Level-1 matches on those
-  are not real community comps — the builders exclude them in area-level work
-  for this reason.
+- **Quote distance, not tier.** `searchCriteria.ringMilesUsed` ("comps within
+  0.5 mi") is what a client cares about; `tier` only picks scoring weights.
+- **Fewer comps is honest, not broken.** A sparse area returns fewer than five
+  rather than reaching past 3 miles — say how many there are.
 
 ## Suggested MCP tools
 

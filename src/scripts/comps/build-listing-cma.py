@@ -1,34 +1,65 @@
 #!/usr/bin/env python3
 """
-Build Listing CMA
+Build Listing CMA (nearest like-kind comps for every active listing)
 
-Nightly per-listing aggregator: for every active listing in `unified_listings`,
-runs the same 5-level hierarchy / 12-factor scoring engine that the frontend
-runs on-demand, and persists the result as `cmaStats` on the listing doc. The
-frontend then becomes a `findOne` lookup instead of a 1–20s API round-trip.
+For every active sale listing in `unified_listings`, finds the closest
+comparable sales and listings and persists the result as `cmaStats` on the
+listing. The website reads that field; it does not compute comps itself.
 
-Match rule (Level 1): case-insensitive exact match of
-`unified_listings.subdivisionName` against the subject's subdivisionName.
-Levels 2–5 fall back to relaxed sqft, then city, then geographic radius.
+── The rule: closest like-kind homes at a similar price ─────────────────────
+A comp must be all three of:
+
+  like kind      same `propertySubType` (a condo never comps a house) and the
+                 same land class (leased land only comps leased land)
+  similar price  within ±15% of the subject's list price — closePrice for a
+                 sale, listPrice for an active listing
+  close by       found by searching outward in rings: 0.5, 1, 2, 3 miles
+
+The search stops at the first ring holding 5 qualifying homes; the 30 nearest
+inside that ring are scored and the top 5 kept. Rings are the same at every
+price. Nothing beyond 3 miles is ever used. Closed sales come from the last 12
+months, widening to 24 only when fewer than 3 qualify within 3 miles, and the
+CMA says so when it does.
+
+Size gives way to distance: there is no square-footage filter. A nearby home
+that is bigger or smaller beats a same-size home across town; the sqft factor
+in the score still prefers the closer size among nearby homes.
+
+── Why it was rebuilt ───────────────────────────────────────────────────────
+The previous engine walked subdivision → city → radius, and radius came last.
+Measured on the 40,582 stored CMAs it replaced, 87% took their closed comps
+from a whole-city query that capped candidates at 20 with no sort, so the 20
+were whatever the database returned first, and no scoring factor measured
+distance. A $1.1M house in Palm Desert drew comps 8.3 miles away at half its
+price while 16 like-sized sales within a mile went unused. Its level-3 pool
+filter read `poolYn`/`pool`, which are empty everywhere, so every pool home
+skipped that level too. The prior build is kept in
+`local-logs/cma-backup/listing-cmaStats-v1.jsonl.gz`.
+
+── Where comps come from ────────────────────────────────────────────────────
+`cma_comps` (built by `build-cma-comps.py`, which runs immediately before this
+in cron), not the raw listing collections. Its `center` is complete and
+2dsphere-indexed, while `unified_closed_listings.coordinates` is on a minority
+of rows, so a radius search against the feed silently misses most sales. Its
+pool, lot-size and address fields are already resolved from the feed's
+misleadingly-named columns. One `$geoNear` per side returns candidates
+already sorted nearest-first.
+
+── Scoring ──────────────────────────────────────────────────────────────────
+Thirteen factors. Proximity is 20 of 100 at every tier; the other twelve keep
+their original relative weights scaled into the remaining 80. Tier
+(affordable / residential / luxury by list price or size) now only selects
+those weights — it no longer sets any radius or lookback.
 
 Usage:
-    # Single listing (smoke test)
-    python3 src/scripts/cma/build-listing-cma.py --key 20260306... --dry-run
+    python3 src/scripts/comps/build-listing-cma.py --key <listingKey> --dry-run
+    python3 src/scripts/comps/build-listing-cma.py --city "Palm Desert"
+    python3 src/scripts/comps/build-listing-cma.py --all --workers 4
+    python3 src/scripts/comps/build-listing-cma.py --all --skip-fresh-hours 0
 
-    # Single city
-    python3 src/scripts/cma/build-listing-cma.py --city "Indian Wells"
-
-    # Cap to first N for testing
-    python3 src/scripts/cma/build-listing-cma.py --all --limit 100 --dry-run
-
-    # Twice-weekly cron (default: skip listings whose cmaStats is < 60h old)
-    python3 src/scripts/cma/build-listing-cma.py --all
-
-    # Force a full rebuild ignoring staleness
-    python3 src/scripts/cma/build-listing-cma.py --all --skip-fresh-hours 0
-
-Suggested cron (twice a week at 1 AM, Mon + Thu):
-    0 1 * * 1,4 cd /root/jpsrealtor && .venv/bin/python3 src/scripts/cma/build-listing-cma.py --all >> /var/log/listing-cma.log 2>&1
+A CMA counts as fresh only if it was built by this engine version
+(`engineVersion`) inside `--skip-fresh-hours`, so a version bump reseeds
+everything on the next run.
 """
 
 from __future__ import annotations
@@ -66,9 +97,17 @@ if not MONGO_URI:
 
 RESIDENTIAL_PROPERTY_TYPE = "A"
 ACTIVE_STATUSES = ["Active", "ComingSoon"]
-TOP_COMPS = 5
-LEVEL_CANDIDATE_LIMIT = 20      # per spec: cap candidates per level before scoring
-MIN_COMPS_PER_STATUS = 3        # stop the level cascade once this is hit
+ENGINE_VERSION = 2
+TOP_COMPS = 5                   # comps kept per side
+RING_MILES = (0.5, 1.0, 2.0, 3.0)
+RING_TARGET = 5                 # stop widening at the first ring holding this many
+MIN_COMPS = 3                   # below this within 3 mi, closed widens its lookback
+CANDIDATE_LIMIT = 30            # nearest candidates inside the chosen ring that get scored
+GEO_FETCH_LIMIT = 200           # nearest rows pulled within the outer ring
+PRICE_BAND = 0.15               # ±15% of the subject's list price
+CLOSED_LOOKBACK_MONTHS = (12, 24)
+RECENCY_SCALE_MONTHS = 24       # recency score reaches 0 at this age
+METERS_PER_MILE = 1609.344
 BULK_BATCH = 50
 
 # subdivisionName values that are placeholders, not real subdivisions. When
@@ -87,61 +126,36 @@ def _is_real_subdivision(name) -> bool:
         return False
     return name.strip().lower() not in PLACEHOLDER_SUBDIVISIONS
 
-# Projection — only fetch fields actually consumed by scoring + shaping. Each
-# candidate doc is otherwise ~5KB (full publicRemarks etc.) and we may pull 200
-# per subject across 5 levels × 2 collections. Cutting this is the single
-# biggest throughput win.
-COMP_PROJECTION = {
-    "listingKey": 1, "listingId": 1, "city": 1, "subdivisionName": 1,
+# cma_comps fields renamed to what the scorers and shapers already read, so
+# the twelve original factors run unchanged on the new source.
+COMP_PROJECT = {
+    "_id": 0,
+    "listingKey": 1, "city": 1, "subdivisionName": 1,
     "propertyType": 1, "propertySubType": 1,
-    "listPrice": 1, "originalListPrice": 1, "currentPrice": 1,
-    "closePrice": 1, "closeDate": 1,
-    "livingArea": 1, "lotSizeSquareFeet": 1, "lotSizeArea": 1,
-    "bedsTotal": 1, "bedroomsTotal": 1,
-    "bathsTotal": 1, "bathroomsTotalDecimal": 1, "bathroomsTotalInteger": 1,
+    "listPrice": 1, "originalListPrice": 1, "closePrice": 1, "price": 1,
+    "livingArea": 1, "lotSizeSquareFeet": "$lotSizeSqft",
+    "bedsTotal": "$beds", "bathsTotal": "$baths",
     "yearBuilt": 1, "garageSpaces": 1,
-    "poolYn": 1, "pool": 1, "spaYn": 1, "spa": 1,
-    "view": 1, "viewYn": 1,
-    "gatedCommunityYn": 1, "seniorCommunityYn": 1,
-    "architecturalStyle": 1, "levels": 1, "stories": 1,
-    "landType": 1,
-    "daysOnMarket": 1, "onMarketDate": 1, "listingContractDate": 1,
-    "coordinates": 1, "latitude": 1, "longitude": 1,
+    "poolKind": 1, "spaKind": 1,
+    "view": 1, "architecturalStyle": 1, "stories": 1, "landType": 1,
+    "daysOnMarket": 1, "eventDate": 1,
     "streetNumber": 1, "streetName": 1, "streetSuffix": 1,
-    "unparsedAddress": 1, "address": 1,
-    "_id": 1,
+    "unparsedAddress": "$address",
+    "distM": 1,
 }
 
-# Tier search parameters (port of TIER_PARAMS from engine.ts)
-TIER_PARAMS = {
-    "affordable": {
-        "sqftRange": 300,
-        "radiusFallbackMiles": 3,
-        "yearBuiltTolerance": 15,
-        "maxCompsPerStatus": 5,
-        "lookbackMonths": {1: 6,  2: 12, 3: 6,  4: 24, 5: 36},
-    },
-    "residential": {
-        "sqftRange": 400,
-        "radiusFallbackMiles": 2,
-        "yearBuiltTolerance": 10,
-        "maxCompsPerStatus": 5,
-        "lookbackMonths": {1: 6,  2: 12, 3: 6,  4: 24, 5: 36},
-    },
-    "luxury": {
-        "sqftRange": 600,
-        "radiusFallbackMiles": 5,
-        "yearBuiltTolerance": 10,
-        "maxCompsPerStatus": 5,
-        "lookbackMonths": {1: 9,  2: 18, 3: 9,  4: 30, 5: 48},
-    },
-}
-
-# 12-factor scoring weights by tier
-SCORING_WEIGHTS = {
+# Original 12-factor weights by tier. They sum to 100; proximity takes 20 and
+# these are scaled into the remaining 80, keeping their relative balance.
+BASE_WEIGHTS = {
     "affordable":  {"sqft": 25, "subdivision": 12, "bedBath": 17, "poolSpa": 5,  "lotSize": 5,  "view": 3,  "recency": 13, "yearBuilt": 8, "archStyle": 0, "stories": 5, "garage": 4, "landType": 3},
     "residential": {"sqft": 20, "subdivision": 15, "bedBath": 12, "poolSpa": 10, "lotSize": 10, "view": 8,  "recency": 10, "yearBuilt": 5, "archStyle": 3, "stories": 3, "garage": 2, "landType": 2},
     "luxury":      {"sqft": 17, "subdivision": 20, "bedBath": 8,  "poolSpa": 10, "lotSize": 15, "view": 13, "recency": 5,  "yearBuilt": 2, "archStyle": 6, "stories": 2, "garage": 1, "landType": 1},
+}
+PROXIMITY_WEIGHT = 20
+SCORING_WEIGHTS = {
+    tier: {**{f: w * (100 - PROXIMITY_WEIGHT) / 100 for f, w in ws.items()},
+           "proximity": PROXIMITY_WEIGHT}
+    for tier, ws in BASE_WEIGHTS.items()
 }
 
 # View categories — used by both detection and scoring
@@ -160,7 +174,7 @@ VIEW_CATEGORIES = {
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 db = client.get_database()
 active_coll = db.unified_listings
-closed_coll = db.unified_closed_listings
+comps_coll = db.cma_comps
 print("✅ Connected to MongoDB")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -191,16 +205,81 @@ def coerce_date(v):
     return None
 
 
-def is_lease(listing: dict) -> bool:
-    pt = (listing.get("propertyType") or "").strip()
-    if pt and pt != RESIDENTIAL_PROPERTY_TYPE:
+# Duplicated from build-cma-comps.py, which cannot be imported (hyphenated
+# filename, connects at import). The subject is read raw from
+# unified_listings, so it needs the same resolution its comps already got.
+ACRE_SQFT = 43560
+LOT_ACRES_MAX = 10.0
+LOT_SQFT_MAX = 4_356_000
+
+
+def _num(v):
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def lot_size_sqft(d: dict):
+    """`lotSizeArea` mixes acres and square feet; see build-cma-comps.py."""
+    sf = _num(d.get("lotSizeSquareFeet"))
+    if sf and sf > 0:
+        return int(round(sf)) if sf <= LOT_SQFT_MAX else None
+    ac = _num(d.get("lotSizeAcres"))
+    if ac and ac > 0:
+        v = ac * ACRE_SQFT
+        return int(round(v)) if v <= LOT_SQFT_MAX else None
+    a = _num(d.get("lotSizeArea"))
+    if a and a > 0:
+        units = str(d.get("lotSizeUnits") or "").strip().lower()
+        if units.startswith("acre"):
+            v = a * ACRE_SQFT
+        elif units.replace(" ", "") in ("squarefeet", "sqft", "squarefoot"):
+            v = a
+        else:
+            v = a * ACRE_SQFT if a < LOT_ACRES_MAX else a
+        return int(round(v)) if v <= LOT_SQFT_MAX else None
+    return None
+
+
+def feature_kind(v) -> str:
+    """private | community | none | other | unknown, from poolFeatures or
+    spaFeatures, which arrive as a string, a dict or a list."""
+    if v is None:
+        t = set()
+    elif isinstance(v, dict):
+        t = {str(k).strip().lower() for k, on in v.items() if on}
+    elif isinstance(v, (list, tuple, set)):
+        t = {str(x).strip().lower() for x in v if x}
+    else:
+        t = {x.strip().lower() for x in str(v).split(",") if x.strip()}
+    if not t:
+        return "unknown"
+    if "private" in t:
+        return "private"
+    if t & {"none", "no pool", "no spa"}:
+        return "none"
+    if t & {"community", "association", "shared"}:
+        return "community"
+    return "other"
+
+
+def _kind_to_bool(kind: str):
+    """A private feature is True; none or community-only is False (the home has
+    no private one); other/unknown cannot say."""
+    if kind == "private":
         return True
-    if (listing.get("propertyTypeName") or "") == "Residential Lease":
-        return True
-    land = (listing.get("landType") or "").strip().lower()
-    if "lease" in land:
-        return True
-    return False
+    if kind in ("none", "community"):
+        return False
+    return None
+
+
+def land_class(land_type) -> str:
+    return "lease" if "lease" in str(land_type or "").lower() else "fee"
 
 
 def days_on_market(listing: dict, reference: datetime | None = None) -> int | None:
@@ -369,15 +448,13 @@ def detect_attributes(listing: dict) -> dict:
     """Resolve pool/spa/view/garage/etc. — MLS fields first, remarks fallback."""
     remarks = (listing.get("publicRemarks") or "") + " " + (listing.get("privateRemarks") or "")
 
-    pool = listing.get("poolYn")
-    if pool is None:
-        pool = listing.get("pool")
+    # poolYn / pool / spaYn / spa are 0% populated; poolFeatures and
+    # spaFeatures carry the answer. Remarks are the fallback only.
+    pool = _kind_to_bool(feature_kind(listing.get("poolFeatures")))
     if pool is None:
         pool = _parse_pool(remarks)
 
-    spa = listing.get("spaYn")
-    if spa is None:
-        spa = listing.get("spa")
+    spa = _kind_to_bool(feature_kind(listing.get("spaFeatures")))
     if spa is None:
         spa = _parse_spa(remarks)
 
@@ -422,13 +499,7 @@ def detect_attributes(listing: dict) -> dict:
 
     land_type = (listing.get("landType") or "").strip() or None
 
-    lot_size = listing.get("lotSizeSquareFeet") or listing.get("lotSizeArea")
-    if isinstance(lot_size, str):
-        try:
-            lot_size = float(lot_size)
-        except ValueError:
-            lot_size = None
-    lot_size = _safe_int(lot_size) or 0
+    lot_size = lot_size_sqft(listing) or 0
 
     return {
         "pool": pool,
@@ -504,107 +575,68 @@ def build_subject(listing: dict) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 🔎 5-LEVEL SEARCH
+# 🔎 RADIUS SEARCH
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def _date_floor(months_back: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=months_back * 30)
+    return (datetime.now(timezone.utc) - timedelta(days=months_back * 30)).replace(tzinfo=None)
 
 
-def _build_query(level: int, subject: dict, status: str, params: dict) -> dict | None:
-    """
-    Build a Mongo query for a given (level, status). Returns None when the level
-    cannot be applied (e.g., L1/L2 require a subdivisionName, L5 requires coords).
-    """
-    sqft = subject["livingArea"]
-    sqft_range = params["sqftRange"]
-    months = params["lookbackMonths"][level]
+def _price_range(subject: dict):
+    lp = subject["listPrice"]
+    if not lp:
+        return None
+    return int(round(lp * (1 - PRICE_BAND))), int(round(lp * (1 + PRICE_BAND)))
 
-    base: dict = {
-        "listingKey": {"$ne": subject["listingKey"]},
+
+def _like_kind_query(subject: dict, status: str, lookback_months: int | None) -> dict:
+    q: dict = {
+        "status": status,
         "propertyType": subject["propertyType"],
+        "listingKey": {"$ne": subject["listingKey"]},
     }
     if subject["propertySubType"]:
-        base["propertySubType"] = subject["propertySubType"]
-
-    if status == "active":
-        base["standardStatus"] = {"$in": ACTIVE_STATUSES}
+        q["propertySubType"] = subject["propertySubType"]
+    if land_class(subject["landType"]) == "lease":
+        q["landType"] = {"$regex": "lease", "$options": "i"}
     else:
-        # A datetime, not .isoformat(): closeDate is BSON date everywhere
-        # (enforced on write by ingest/closedate.py), and BSON never compares a
-        # string against a date, so a string bound here would match nothing.
-        base["closeDate"] = {"$gte": _date_floor(months)}
-
-    # Most listings carry sqft; if not, skip the constraint to avoid zero-result queries.
-    if sqft and sqft > 0:
-        base["livingArea"] = {"$gte": max(1, sqft - sqft_range), "$lte": sqft + sqft_range}
-
-    if level == 1:
-        # Skip subdivision-tight if the subject has no real subdivision (placeholder
-        # names like "Not Applicable" exist in many cities and pull cross-city
-        # comps), or if subject city is missing.
-        if not _is_real_subdivision(subject["subdivisionName"]) or not subject["city"]:
-            return None
-        # Scope by BOTH subdivisionName AND city — common subdivision names
-        # (e.g. "Bella Vista", "Trilogy") exist in many cities and would
-        # otherwise pull cross-city comps. Regression caught 2026-05-05.
-        base["subdivisionName"] = {"$regex": f"^{_escape_regex(subject['subdivisionName'])}$", "$options": "i"}
-        base["city"] = {"$regex": f"^{_escape_regex(subject['city'])}$", "$options": "i"}
-        if subject["bedsTotal"]:
-            base["bedsTotal"] = {"$gte": subject["bedsTotal"] - 1, "$lte": subject["bedsTotal"] + 1}
-        if subject["landType"]:
-            base["landType"] = subject["landType"]
-        if subject["pool"] is True:
-            base["$or"] = [{"poolYn": True}, {"pool": True}]
-
-    elif level == 2:
-        if not _is_real_subdivision(subject["subdivisionName"]) or not subject["city"]:
-            return None
-        base["subdivisionName"] = {"$regex": f"^{_escape_regex(subject['subdivisionName'])}$", "$options": "i"}
-        base["city"] = {"$regex": f"^{_escape_regex(subject['city'])}$", "$options": "i"}
-        if sqft and sqft > 0:
-            base["livingArea"] = {"$gte": max(1, sqft - sqft_range - 200), "$lte": sqft + sqft_range + 200}
-
-    elif level == 3:
-        if not subject["city"]:
-            return None
-        base["city"] = {"$regex": f"^{_escape_regex(subject['city'])}$", "$options": "i"}
-        if subject["bedsTotal"]:
-            base["bedsTotal"] = {"$gte": subject["bedsTotal"] - 1, "$lte": subject["bedsTotal"] + 1}
-        if subject["pool"] is True:
-            base["$or"] = [{"poolYn": True}, {"pool": True}]
-
-    elif level == 4:
-        if not subject["city"]:
-            return None
-        base["city"] = {"$regex": f"^{_escape_regex(subject['city'])}$", "$options": "i"}
-        if sqft and sqft > 0:
-            base["livingArea"] = {"$gte": max(1, sqft - sqft_range - 300), "$lte": sqft + sqft_range + 300}
-
-    elif level == 5:
-        lng, lat = subject["longitude"], subject["latitude"]
-        if not (isinstance(lng, (int, float)) and isinstance(lat, (int, float))):
-            return None
-        max_dist_m = int(params["radiusFallbackMiles"] * 1609.34)
-        base["coordinates"] = {
-            "$nearSphere": {
-                "$geometry": {"type": "Point", "coordinates": [lng, lat]},
-                "$maxDistance": max_dist_m,
-            }
-        }
-
-    return base
+        q["landType"] = {"$not": re.compile("lease", re.I)}
+    pr = _price_range(subject)
+    if pr:
+        q["price"] = {"$gte": pr[0], "$lte": pr[1]}
+    if status == "closed" and lookback_months:
+        q["eventDate"] = {"$gte": _date_floor(lookback_months)}
+    return q
 
 
-def _query_collection(coll, query: dict, limit: int) -> list[dict]:
-    cursor = coll.find(query, COMP_PROJECTION).limit(limit)
-    return [doc for doc in cursor if not is_lease(doc)]
+def _nearest(subject: dict, query: dict) -> list[dict]:
+    """Like-kind rows within the outer ring, nearest first."""
+    pipeline = [
+        {"$geoNear": {
+            "near": {"type": "Point", "coordinates": [subject["longitude"], subject["latitude"]]},
+            "key": "center",
+            "distanceField": "distM",
+            "maxDistance": RING_MILES[-1] * METERS_PER_MILE,
+            "spherical": True,
+            "query": query,
+        }},
+        {"$limit": GEO_FETCH_LIMIT},
+        {"$project": COMP_PROJECT},
+    ]
+    rows = list(comps_coll.aggregate(pipeline))
+    for r in rows:
+        r["distanceMiles"] = round(r.pop("distM") / METERS_PER_MILE, 2)
+    return rows
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 📊 12-FACTOR SCORING
-# ──────────────────────────────────────────────────────────────────────────────
+def _pick_ring(rows: list[dict]):
+    """First ring holding RING_TARGET homes; otherwise everything inside 3 mi."""
+    for ring in RING_MILES:
+        inside = [r for r in rows if r["distanceMiles"] <= ring]
+        if len(inside) >= RING_TARGET:
+            return ring, inside
+    return RING_MILES[-1], rows
 
 
 def _score_sqft(subject, comp):
@@ -653,18 +685,12 @@ def _score_bed_bath(subject, comp):
 
 
 def _comp_pool(comp):
-    """Comp-side pool resolution from MLS fields only — no remarks parsing (hot path)."""
-    p = comp.get("poolYn")
-    if p is None:
-        p = comp.get("pool")
-    return p if isinstance(p, bool) else None
+    """From cma_comps.poolKind — resolved from poolFeatures at build time."""
+    return _kind_to_bool(comp.get("poolKind") or "unknown")
 
 
 def _comp_spa(comp):
-    s = comp.get("spaYn")
-    if s is None:
-        s = comp.get("spa")
-    return s if isinstance(s, bool) else None
+    return _kind_to_bool(comp.get("spaKind") or "unknown")
 
 
 def _score_pool_spa(subject, comp):
@@ -796,7 +822,16 @@ def _score_land_type(subject, comp):
     return 1.0 if s == c else 0.0
 
 
+def _score_proximity(comp):
+    """1.0 at the subject, falling linearly to 0 at the outer ring."""
+    d = comp.get("distanceMiles")
+    if d is None:
+        return None
+    return max(0.0, 1.0 - d / RING_MILES[-1])
+
+
 SCORERS = {
+    "proximity":   lambda s, c, st, mlm: _score_proximity(c),
     "sqft":        lambda s, c, st, mlm: _score_sqft(s, c),
     "subdivision": lambda s, c, st, mlm: _score_subdivision(s, c),
     "bedBath":     lambda s, c, st, mlm: _score_bed_bath(s, c),
@@ -837,39 +872,40 @@ def score_comp(subject: dict, comp: dict, status: str, max_lookback_months: int)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def search_for_status(subject: dict, status: str, params: dict) -> tuple[list[tuple[float, dict]], int, int, int]:
-    """
-    Walk levels 1→5 for a single status. Stop at the first level that yields
-    ≥ MIN_COMPS_PER_STATUS scored comps. Return (scored_comps, level_used,
-    candidates_evaluated, subdivision_matched_flag).
-    """
-    coll = active_coll if status == "active" else closed_coll
-    candidates_evaluated = 0
-    last_level = 0
-    subdivision_matched = 0  # 1 if level 1 or 2 produced the comps
+def search_for_status(subject: dict, status: str) -> tuple[list[tuple[float, dict]], dict]:
+    """Nearest like-kind comps for one side. Returns (scored top N, info)."""
+    info = {"ringMiles": None, "lookbackMonths": None, "candidates": 0,
+            "maxDistanceMiles": None, "reason": None}
+    lng, lat = subject["longitude"], subject["latitude"]
+    if not (isinstance(lng, (int, float)) and isinstance(lat, (int, float))):
+        info["reason"] = "no_coordinates"
+        return [], info
 
-    for level in range(1, 6):
-        query = _build_query(level, subject, status, params)
-        if query is None:
-            continue
-        max_lookback = params["lookbackMonths"][5]  # widest possible window for recency scoring
-        candidates = _query_collection(coll, query, LEVEL_CANDIDATE_LIMIT)
-        candidates_evaluated += len(candidates)
-        last_level = level
+    lookbacks = CLOSED_LOOKBACK_MONTHS if status == "closed" else (None,)
+    for lookback in lookbacks:
+        rows = _nearest(subject, _like_kind_query(subject, status, lookback))
+        ring, inside = _pick_ring(rows)
+        if len(inside) >= MIN_COMPS:
+            break
 
-        scored = []
-        for c in candidates:
-            score = score_comp(subject, c, status, max_lookback)
-            scored.append((score, c))
-        scored.sort(key=lambda r: r[0], reverse=True)
+    pool = inside[:CANDIDATE_LIMIT]
+    for c in pool:
+        if status == "closed":
+            c["closeDate"] = c.get("eventDate")
+        else:
+            c["onMarketDate"] = c.get("eventDate")
 
-        if len(scored) >= MIN_COMPS_PER_STATUS:
-            if level <= 2:
-                subdivision_matched = 1
-            return scored[: params["maxCompsPerStatus"]], level, candidates_evaluated, subdivision_matched
+    scored = sorted(((score_comp(subject, c, status, RECENCY_SCALE_MONTHS), c) for c in pool),
+                    key=lambda r: r[0], reverse=True)[:TOP_COMPS]
 
-    # Never met the threshold — return whatever we last scored.
-    return scored[: params["maxCompsPerStatus"]] if "scored" in locals() else [], last_level, candidates_evaluated, subdivision_matched
+    info.update({
+        "ringMiles": ring if scored else None,
+        "lookbackMonths": lookback,
+        "candidates": len(pool),
+        "maxDistanceMiles": max((c["distanceMiles"] for _, c in scored), default=None),
+        "reason": None if scored else "no_like_kind_within_3mi",
+    })
+    return scored, info
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -882,6 +918,7 @@ def _shape_active_comp(score: float, c: dict) -> dict:
     living_area = _safe_int(c.get("livingArea")) or 0
     return {
         "listingKey": c.get("listingKey"),
+        "distanceMiles": c.get("distanceMiles"),
         "address": _normalize_address(c),
         "city": c.get("city") or "",
         "subdivisionName": c.get("subdivisionName") or None,
@@ -910,6 +947,7 @@ def _shape_closed_comp(score: float, c: dict) -> dict:
     stl = (close_price / list_price) if (close_price and list_price) else None
     return {
         "listingKey": c.get("listingKey"),
+        "distanceMiles": c.get("distanceMiles"),
         "address": _normalize_address(c),
         "city": c.get("city") or "",
         "subdivisionName": c.get("subdivisionName") or None,
@@ -1032,30 +1070,36 @@ def generate_narrative(subject: dict, active_stats: dict, closed_stats: dict, le
 
 
 def collect_limitations(subject: dict, active_comps: list[dict], closed_comps: list[dict],
-                       levels_used: dict, subdivision_matched: bool) -> list[str]:
+                        search: dict) -> list[str]:
     notes: list[str] = []
+    a, c = search["active"], search["closed"]
+
+    if a["reason"] == "no_coordinates":
+        notes.append("Subject has no map coordinates — no radius search was possible.")
+        return notes
+
+    if not subject["propertySubType"]:
+        notes.append("Subject has no property sub-type — comps are not restricted to like kind.")
+    if not subject["listPrice"]:
+        notes.append("Subject has no list price — comps are not restricted to a price band.")
 
     if len(active_comps) < 3:
-        notes.append(f"Only {len(active_comps)} active comparable(s) found.")
+        notes.append(f"Only {len(active_comps)} like-kind active listing(s) within 3 mi at ±15% of list price.")
     if len(closed_comps) < 3:
-        notes.append(f"Only {len(closed_comps)} closed comparable(s) found.")
+        notes.append(f"Only {len(closed_comps)} like-kind closed sale(s) within 3 mi at ±15% of list price.")
 
-    if subject["subdivisionName"] and not subdivision_matched:
-        notes.append(f"Insufficient comparables in {subject['subdivisionName']} — search expanded beyond the subdivision.")
+    if c["ringMiles"] and c["ringMiles"] >= 2 and closed_comps:
+        prev = RING_MILES[RING_MILES.index(c["ringMiles"]) - 1]
+        notes.append(f"Fewer than {RING_TARGET} like-kind sales within {prev:g} mi — "
+                     f"closed comps reach {c['maxDistanceMiles']:.1f} mi.")
+    if c["lookbackMonths"] and c["lookbackMonths"] > CLOSED_LOOKBACK_MONTHS[0] and closed_comps:
+        notes.append(f"Closed comps required a {c['lookbackMonths']}-month lookback — fewer than "
+                     f"{MIN_COMPS} like-kind sales within 3 mi in {CLOSED_LOOKBACK_MONTHS[0]} months.")
 
     if subject["pool"] is True and closed_comps:
-        with_pool = sum(1 for c in closed_comps if c.get("pool") is True)
+        with_pool = sum(1 for x in closed_comps if x.get("pool") is True)
         if with_pool / len(closed_comps) < 0.6:
-            notes.append("Pool mismatch: subject has a pool but most closed comps do not.")
-
-    if levels_used.get("closed", 0) >= 4:
-        notes.append("Closed comps required an extended lookback period.")
-
-    subject_lease = (subject["landType"] or "").lower() == "lease"
-    if not subject_lease and closed_comps:
-        lease_comps = sum(1 for c in closed_comps if (c.get("landType") or "").lower() == "lease")
-        if lease_comps:
-            notes.append(f"Land-type mismatch: {lease_comps} of {len(closed_comps)} closed comps are lease-land.")
+            notes.append("Pool mismatch: subject has a private pool but most closed comps do not.")
 
     return notes
 
@@ -1063,10 +1107,10 @@ def collect_limitations(subject: dict, active_comps: list[dict], closed_comps: l
 def collect_inferences(subject: dict, listing: dict) -> list[str]:
     """Note attributes that were inferred from public remarks rather than read from MLS fields."""
     notes: list[str] = []
-    has_field_pool = listing.get("poolYn") is not None or listing.get("pool") is not None
+    has_field_pool = _kind_to_bool(feature_kind(listing.get("poolFeatures"))) is not None
     if subject["pool"] is not None and not has_field_pool:
         notes.append(f"Pool inferred from listing remarks ({'present' if subject['pool'] else 'absent'}).")
-    has_field_spa = listing.get("spaYn") is not None or listing.get("spa") is not None
+    has_field_spa = _kind_to_bool(feature_kind(listing.get("spaFeatures"))) is not None
     if subject["spa"] is not None and not has_field_spa:
         notes.append(f"Spa inferred from listing remarks ({'present' if subject['spa'] else 'absent'}).")
     if subject["view"] and not listing.get("view") and not (listing.get("viewYn") is True):
@@ -1076,7 +1120,10 @@ def collect_inferences(subject: dict, listing: dict) -> list[str]:
     return notes
 
 
-def assess_quality(active_count: int, closed_count: int) -> dict:
+CONFIDENCE_ORDER = ["insufficient", "low", "medium", "good", "high"]
+
+
+def assess_quality(active_count: int, closed_count: int, closed_search: dict) -> dict:
     total = active_count + closed_count
     if total >= 8:
         confidence = "high"
@@ -1088,7 +1135,22 @@ def assess_quality(active_count: int, closed_count: int) -> dict:
         confidence = "low"
     else:
         confidence = "insufficient"
-    return {"confidence": confidence, "activeCompCount": active_count, "closedCompCount": closed_count}
+
+    # Distance and age cost confidence: one notch each for reaching the outer
+    # ring, for needing the long lookback, and for fewer than 3 closed sales.
+    downgraded = []
+    if closed_search.get("ringMiles") == RING_MILES[-1] and closed_count:
+        downgraded.append("closed comps reach the 3 mi ring")
+    if (closed_search.get("lookbackMonths") or 0) > CLOSED_LOOKBACK_MONTHS[0] and closed_count:
+        downgraded.append("closed comps needed a 24-month lookback")
+    if closed_count < MIN_COMPS:
+        downgraded.append(f"fewer than {MIN_COMPS} closed comps")
+    if confidence != "insufficient":
+        i = max(1, CONFIDENCE_ORDER.index(confidence) - len(downgraded))
+        confidence = CONFIDENCE_ORDER[i]
+
+    return {"confidence": confidence, "activeCompCount": active_count,
+            "closedCompCount": closed_count, "downgradedFor": downgraded}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1099,10 +1161,9 @@ def assess_quality(active_count: int, closed_count: int) -> dict:
 def build_cma_for_listing(listing: dict) -> dict:
     subject = build_subject(listing)
     tier = subject["tier"]
-    params = TIER_PARAMS[tier]
 
-    active_scored, active_level, active_evaluated, active_subdiv = search_for_status(subject, "active", params)
-    closed_scored, closed_level, closed_evaluated, closed_subdiv = search_for_status(subject, "closed", params)
+    active_scored, active_info = search_for_status(subject, "active")
+    closed_scored, closed_info = search_for_status(subject, "closed")
 
     active_comps = [_shape_active_comp(score, c) for score, c in active_scored]
     closed_comps = [_shape_closed_comp(score, c) for score, c in closed_scored]
@@ -1110,16 +1171,20 @@ def build_cma_for_listing(listing: dict) -> dict:
     active_stats = _aggregate_active(active_comps)
     closed_stats = _aggregate_closed(closed_comps)
 
-    levels_used = {"active": active_level, "closed": closed_level}
-    subdivision_matched = bool(active_subdiv or closed_subdiv)
+    search = {"active": active_info, "closed": closed_info}
+    ring_level = {s: (RING_MILES.index(i["ringMiles"]) + 1 if i["ringMiles"] else 0)
+                  for s, i in search.items()}
+    subdiv = subject["subdivisionName"].strip().lower()
+    subdivision_matched = bool(
+        _is_real_subdivision(subject["subdivisionName"]) and any(
+            (c.get("subdivisionName") or "").strip().lower() == subdiv
+            for c in active_comps + closed_comps))
 
-    quality = assess_quality(len(active_comps), len(closed_comps))
-    narrative = generate_narrative(subject, active_stats, closed_stats, levels_used)
-    limitations = collect_limitations(subject, active_comps, closed_comps, levels_used, subdivision_matched)
+    quality = assess_quality(len(active_comps), len(closed_comps), closed_info)
+    narrative = generate_narrative(subject, active_stats, closed_stats, ring_level)
+    limitations = collect_limitations(subject, active_comps, closed_comps, search)
     inferences = collect_inferences(subject, listing)
 
-    # `subject` includes some convenience fields (e.g. tier, longitude/latitude).
-    # The persisted shape keeps only the spec-required keys.
     subject_out = {
         "listPrice": subject["listPrice"],
         "livingArea": subject["livingArea"],
@@ -1136,8 +1201,10 @@ def build_cma_for_listing(listing: dict) -> dict:
         "view": subject["view"],
         "garageSpaces": subject["garageSpaces"],
     }
+    pr = _price_range(subject)
 
     return {
+        "engineVersion": ENGINE_VERSION,
         "lastUpdated": datetime.now(timezone.utc).isoformat(),
         "tier": tier,
         "subject": subject_out,
@@ -1145,9 +1212,19 @@ def build_cma_for_listing(listing: dict) -> dict:
         "closedComps": closed_comps,
         "stats": {"active": active_stats, "closed": closed_stats},
         "searchCriteria": {
-            "levelsUsed": levels_used,
+            "method": "radius",
+            "ringMiles": list(RING_MILES),
+            "ringMilesUsed": {s: i["ringMiles"] for s, i in search.items()},
+            "maxCompDistanceMiles": {s: i["maxDistanceMiles"] for s, i in search.items()},
+            "closedLookbackMonths": closed_info["lookbackMonths"],
+            "priceBand": PRICE_BAND,
+            "priceRange": list(pr) if pr else None,
+            "likeKind": {"propertySubType": subject["propertySubType"] or None,
+                         "landClass": land_class(subject["landType"])},
+            # Kept for readers of the old shape: the ring index, 1 = 0.5 mi … 4 = 3 mi.
+            "levelsUsed": ring_level,
             "subdivisionMatched": subdivision_matched,
-            "totalCandidatesEvaluated": {"active": active_evaluated, "closed": closed_evaluated},
+            "totalCandidatesEvaluated": {s: i["candidates"] for s, i in search.items()},
         },
         "narrative": narrative,
         "limitations": limitations,
@@ -1164,7 +1241,7 @@ def build_cma_for_listing(listing: dict) -> dict:
 def _process_listing_chunk(listing_ids: list, options: dict) -> dict:
     """
     Process a list of listing _ids and return aggregate counts. Module-level
-    `active_coll` / `closed_coll` are reused — when this is invoked in a spawned
+    `active_coll` / `comps_coll` are reused — when this is invoked in a spawned
     child process, the module's top-level code re-runs and gives that child its
     own MongoClient (the recommended pymongo+multiprocessing pattern).
     """
@@ -1188,7 +1265,8 @@ def _process_listing_chunk(listing_ids: list, options: dict) -> dict:
         if fresh_cutoff is not None:
             existing = listing.get("cmaStats") or {}
             last_updated = coerce_date(existing.get("lastUpdated"))
-            if last_updated and last_updated >= fresh_cutoff:
+            if (existing.get("engineVersion") == ENGINE_VERSION
+                    and last_updated and last_updated >= fresh_cutoff):
                 skipped_fresh += 1
                 continue
         processed += 1
@@ -1208,12 +1286,17 @@ def _process_listing_chunk(listing_ids: list, options: dict) -> dict:
         closed_n = stats["stats"]["closed"]["count"]
         median = stats["stats"]["closed"].get("medianPrice") or 0
         median_str = f"median ${median:,.0f}" if median else "median —"
-        levels = stats["searchCriteria"]["levelsUsed"]
+        sc = stats["searchCriteria"]
+        ring = sc["ringMilesUsed"]
+        lb = "" if (sc["closedLookbackMonths"] or 12) <= 12 else " 24mo"
+
+        def _r(v):
+            return f"≤{v:g}mi" if v else "none"
 
         print(
             f"{label_prefix}#{processed}: {label[:38]:<38} "
-            f"{active_n:>2} active (L{levels['active']}), "
-            f"{closed_n:>2} closed (L{levels['closed']}), "
+            f"{active_n:>2} active ({_r(ring['active'])}), "
+            f"{closed_n:>2} closed ({_r(ring['closed'])}{lb}), "
             f"{median_str}  conf={stats['quality']['confidence']}",
             flush=True,
         )
@@ -1301,6 +1384,7 @@ def main():
     )
     if fresh_cutoff is not None:
         query["$or"] = [
+            {"cmaStats.engineVersion": {"$ne": ENGINE_VERSION}},
             {"cmaStats.lastUpdated": {"$exists": False}},
             {"cmaStats.lastUpdated": {"$lt": fresh_cutoff.isoformat()}},
         ]

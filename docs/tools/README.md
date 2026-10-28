@@ -42,6 +42,9 @@ Database: **`admin`** (yes — all app data is in `admin`; migration to
 | `search_index` | 49,614 | — | search-suggest payloads |
 | `market_history` | see below | `_id` = `"<scope>:<key>:<type>:<year>"` | annual medians per area; **permanent, no TTL** |
 | `loan_products` | 2 | `_id` | down-payment ladder, mortgage-insurance cost bands |
+| `area_geo`, `sales_grid`, `sales_hotspots` | — | see doc | sales mapped by coordinate — [sales-heatmap.md](sales-heatmap.md) |
+| `area_competition` | — | `_id` = `"ac:<scope>:<key>:<type>:<year>"` | how concentrated the agents selling an area are — [area-competition.md](area-competition.md) |
+| `cma_comps` | — | `_id` = `"cc:<c\|a>:<listingKey>"` | one normalised, geo-indexed comparable per row; feeds the listing and parcel CMAs — [area-cma.md](area-cma.md) |
 
 ## The block index
 
@@ -61,7 +64,7 @@ tool should return, and the absent case.
 | `rentStats.poolPremium` | `subdivisions`, `rent_rates` | `build-pool-premium.py` | 759 subs / 896 ZIPs | [rent-rates.md](rent-rates.md) |
 | `inventoryProfile` | `subdivisions`, `cities` | `build-inventory-profile.py` | 742 subs / 836 cities | [inventory-profile.md](inventory-profile.md) |
 | `cmaStats` | `subdivisions` | `build-subdivision-cma.py` | 1,426 | [cma-comps.md](cma-comps.md) |
-| `cmaStats` | `unified_listings` | `build-listing-cma.py` | 46,768 listings | [cma-comps.md](cma-comps.md) |
+| `cmaStats` | `unified_listings` | `build-listing-cma.py` | every active sale listing with coordinates | [cma-comps.md](cma-comps.md) |
 | `rateProfile` | `unified_listings` (lease) | `build-rate-profile.py` | 15,935 of 15,936 leases | [rent-rates.md](rent-rates.md) |
 | *(whole doc)* | **`agents`** | `agents/build-agents.py` | 240,236 agents | [agents.md](agents.md) |
 | *(whole doc)* | **`brokerages`** | `agents/build-agents.py` | 29,719 brokerages | [agents.md](agents.md) |
@@ -85,7 +88,7 @@ it when a user asks how current a figure is.
 | Daily 7 AM | `update-status.py` (status inference) |
 | Daily 8 AM | `build-subdivision-cma.py --all` |
 | Daily 4 AM | `build-search-index.py` |
-| Sun 1 AM | `build-listing-cma.py --all` |
+| Sun 1 AM | `build-cma-comps.py --all` → `build-listing-cma.py --all` (one `flock`ed chain) |
 | Tue & Fri 3 AM | `build-agents.py --all` (~17 min) |
 | Mon–Sat 9:30 AM | `build-rate-profile.py --all` |
 | **Tue + Fri 1:30 AM** | `build-seasonal-rates` → `build-closed-seasonal-rates` |

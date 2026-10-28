@@ -12,7 +12,7 @@ The CMA (Comparative Market Analysis) system pre-computes market statistics for 
 
 Two scopes:
 
-1. **Listing-level CMA** (already exists in the frontend): generates an on-the-fly report for one subject property. Uses a tiered comp-search hierarchy and remarks parser. Lives under `src/lib/analytics/` on the frontend. Not managed by this backend pipeline.
+1. **Listing-level CMA**: the nearest like-kind comps for one subject property, precomputed weekly by `src/scripts/comps/build-listing-cma.py` onto `unified_listings.cmaStats`. See `docs/cma/LISTING_CMA.md`.
 2. **Subdivision CMA** (this document): pre-computed nightly. Describes the market for a whole community as a unit. Persisted onto each subdivision doc. **This is what the cron at 08:00 builds.**
 3. **City CMA** (planned): roll-up aggregate of all subdivision CMAs within a city, plus a `"non-subdivision"` bucket for listings that have no subdivision match. Will be its own script (`build-city-cma.py`) keyed off data produced by #2.
 4. **Parcel CMA**: coordinates in, CMA out, for an area drawn on a map that has no name to look up. `src/scripts/comps/area-cma.py` over the `cma_comps` collection. It reuses this document's window, comp-ordering rule and `good`/`fair`/`insufficient` thresholds verbatim so the two scopes cannot disagree about what "fair" means. See `docs/tools/area-cma.md`.
